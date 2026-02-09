@@ -36,12 +36,6 @@ jobs:
         run: |
           uv sync --extra interactive --extra dev
 
-      - name: Build pattern-fill wheel
-        run: |
-          uv build
-          mkdir -p _site/wheels
-          cp dist/pattern_fill-0.1.0-py3-none-any.whl _site/wheels/
-
       - name: Export marimo notebook to WASM
         run: |
           uv run marimo export html-wasm notebooks/pattern_designer.py \
