@@ -12,21 +12,12 @@ async def _():
     # Check if we're running in Pyodide (WASM environment)
     if "pyodide" in sys.modules:
         import micropip
-        import js
 
-        # Install/upgrade dependencies first
+        # Install dependencies from PyPI
+        print("📦 Installing dependencies from PyPI...")
         await micropip.install("typing-extensions>=4.12.0")
         await micropip.install("wigglystuff>=0.2.21")
-
-        # Build absolute URL for the bundled wheel using browser's origin (not href!)
-        # js.location.origin = "http://localhost:8000" (no path)
-        # js.location.href = "http://localhost:8000/index.html" or "/assets/index.html"
-        base_url = str(js.location.origin)
-        wheel_url = f"{base_url}/wheels/pattern_fill-0.1.0-py3-none-any.whl"
-
-        # Install pattern-fill directly from the URL
-        print(f"📦 Installing pattern-fill from: {wheel_url}")
-        await micropip.install(wheel_url)
+        await micropip.install("pattern-fill")
         print("✅ All packages installed successfully!")
     return
 
