@@ -1,0 +1,47 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      publish_to_test:
+        description: 'Publish to TestPyPI instead of PyPI'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for trusted publishing
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build package
+        run: uv build
+
+      - name: Publish to TestPyPI
+        if: ${{ github.event.inputs.publish_to_test == 'true' }}
+        run: |
+          uv publish \
+            --publish-url https://test.pypi.org/legacy/ \
+            --token ${{ secrets.TEST_PYPI_TOKEN }}
+
+      - name: Publish to PyPI (using trusted publishing)
+        if: ${{ github.event_name == 'release' && github.event.inputs.publish_to_test != 'true' }}
+        run: uv publish
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}

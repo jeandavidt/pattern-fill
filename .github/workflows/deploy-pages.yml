@@ -39,6 +39,8 @@ jobs:
       - name: Build pattern-fill wheel
         run: |
           uv build
+          mkdir -p _site/wheels
+          cp dist/pattern_fill-0.1.0-py3-none-any.whl _site/wheels/
 
       - name: Export marimo notebook to WASM
         run: |
@@ -46,11 +48,6 @@ jobs:
             -o _site/index.html \
             --mode run \
             --no-show-code
-
-      - name: Copy wheel to _site (after export)
-        run: |
-          mkdir -p _site/wheels
-          cp dist/pattern_fill-0.1.0-py3-none-any.whl _site/wheels/
 
       - name: Create .nojekyll file
         run: touch _site/.nojekyll

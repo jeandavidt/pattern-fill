@@ -1,7 +1,7 @@
 import marimo
 
-__generated_with = "0.19.8"
-app = marimo.App(width="medium")
+__generated_with = "0.19.9"
+app = marimo.App(width="full")
 
 
 @app.cell
@@ -47,20 +47,33 @@ def _():
     )
     import io
     import json
+    import os
+    import tempfile
+    import zipfile
+    import shutil
+    import base64
+    from meteaudata import Signal, Dataset, TimeSeries
 
     return (
         ChartPuck,
         DailyPattern,
+        Dataset,
+        Signal,
         SineComponent,
+        base64,
         fit_pattern,
         fit_sine_pattern,
         io,
         json,
         mo,
         np,
+        os,
         pattern_fill,
         pd,
         plt,
+        shutil,
+        tempfile,
+        zipfile,
     )
 
 
@@ -112,7 +125,7 @@ def _(np, pd):
 @app.cell
 def _(mo):
     data_source = mo.ui.radio(
-        options=["demo", "upload"],
+        options=["demo", "upload_csv", "upload_meteaudata"],
         value="demo",
         label="Data source",
     )
@@ -121,32 +134,55 @@ def _(mo):
         kind="area",
         label="Upload a CSV, Parquet, or Excel file",
     )
+    meteaudata_upload = mo.ui.file(
+        filetypes=[".zip"],
+        kind="area",
+        label="Upload a metEAUdata zip file (Signal or Dataset)",
+    )
     data_source
-    return data_source, file_upload
+    return data_source, file_upload, meteaudata_upload
 
 
 @app.cell
-def _(data_source, file_upload, mo):
-    mo.stop(data_source.value != "upload")
-    file_upload
+def _(data_source, file_upload, meteaudata_upload, mo):
+    mo.stop(data_source.value == "demo")
+    _upload_widget = file_upload if data_source.value == "upload_csv" else meteaudata_upload
+    _upload_widget
     return
 
 
 @app.cell
-def _(data_source, file_upload, generate_demo_data, io, mo, pd):
-    # Debug: Check what data_source.value actually is
+def _(
+    Dataset,
+    Signal,
+    data_source,
+    file_upload,
+    generate_demo_data,
+    io,
+    meteaudata_upload,
+    mo,
+    os,
+    pd,
+    tempfile,
+    zipfile,
+):
     _debug_msg = f"data_source.value = {repr(data_source.value)}"
+
+    original_signal = None
+    original_dataset = None
 
     if data_source.value == "demo":
         try:
             df = generate_demo_data()
+            import_type = "demo"
         except Exception as e:
             mo.stop(
                 True,
                 mo.callout(mo.md(f"Error generating demo data: {e}"), kind="danger"),
             )
             df = pd.DataFrame()
-    else:
+            import_type = None
+    elif data_source.value == "upload_csv":
         mo.stop(
             not file_upload.value,
             mo.callout(
@@ -168,11 +204,133 @@ def _(data_source, file_upload, generate_demo_data, io, mo, pd):
                 mo.callout(mo.md("Unsupported file type."), kind="danger"),
             )
             df = pd.DataFrame()
-    return (df,)
+        import_type = "csv"
+    else:
+        mo.stop(
+            not meteaudata_upload.value,
+            mo.callout(
+                mo.md(f"Upload a metEAUdata zip file to continue. ({_debug_msg})"),
+                kind="warn",
+            ),
+        )
+        _uploaded = meteaudata_upload.value[0]
+        _name = _uploaded.name
+        _buf = io.BytesIO(_uploaded.contents)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            zip_path = f"{tmpdir}/upload.zip"
+            with open(zip_path, "wb") as f:
+                f.write(_buf.getvalue())
+
+            # Extract the uploaded ZIP
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(tmpdir)
+
+            dir_items = os.listdir(tmpdir)
+
+            # Check if there are nested ZIP files (metEAUdata exports often contain nested ZIPs)
+            nested_zips = [f for f in dir_items if f.endswith(".zip")]
+            if nested_zips:
+                # Extract all nested ZIP files
+                for nested_zip in nested_zips:
+                    nested_zip_path = os.path.join(tmpdir, nested_zip)
+                    with zipfile.ZipFile(nested_zip_path, "r") as zip_ref:
+                        zip_ref.extractall(tmpdir)
+                # Refresh directory listing after extracting nested ZIPs
+                dir_items = os.listdir(tmpdir)
+
+            # Check if it's a Dataset (has dataset.json) or Signal(s)
+            has_dataset_json = "dataset.json" in dir_items
+
+            if has_dataset_json:
+                # Load as Dataset
+                dataset = Dataset.load_from_directory(tmpdir)
+
+                # Create DataFrame from all time series across all signals
+                df = pd.DataFrame()
+                for sig_name, sig in dataset.signals.items():
+                    for ts_name, ts in sig.time_series.items():
+                        # Use fully qualified name: signal_name.time_series_name
+                        col_name = f"{sig_name}.{ts_name}"
+                        df[col_name] = ts.series
+
+                import_type = "meteaudata"
+                original_signal = None  # It's a Dataset, not a single Signal
+                original_dataset = dataset
+            else:
+                # Load as Signal(s)
+                # metEAUdata Signals are stored in directories like "signal_name#1_data"
+                # where #1 is the version number
+                signal_dirs = [
+                    d
+                    for d in dir_items
+                    if d.endswith("_data") and os.path.isdir(os.path.join(tmpdir, d))
+                ]
+                # Extract signal names by removing "_data" suffix
+                # e.g., "pattern_filled#1_data" -> "pattern_filled#1"
+                signal_names = [d.replace("_data", "") for d in signal_dirs]
+
+                if not signal_names:
+                    mo.stop(
+                        True,
+                        mo.callout(
+                            mo.md(
+                                "No Signal or Dataset found in zip file. Expected format: `signal_name#version_data/` directory (e.g., `pattern_filled#1_data/`) or `dataset.json` file."
+                            ),
+                            kind="danger",
+                        ),
+                    )
+                    df = pd.DataFrame()
+                    import_type = None
+                else:
+                    signal_name = signal_names[0]
+
+                    # Try to load the Signal
+                    try:
+                        signal = Signal.load_from_directory(tmpdir, signal_name)
+
+                        df = pd.DataFrame()
+                        for ts_name, ts in signal.time_series.items():
+                            df[ts_name] = ts.series
+
+                        original_signal = signal
+                    except ValueError:
+                        # Workaround for metEAUdata parsing issue with multiple # in time series names
+                        # Load CSV files manually and create a Signal object
+                        data_dir = os.path.join(tmpdir, f"{signal_name}_data")
+                        csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+
+                        df = pd.DataFrame()
+                        for csv_file in csv_files:
+                            csv_path = os.path.join(data_dir, csv_file)
+                            ts_data = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                            # Use the CSV filename (without .csv) as the column name
+                            # Keep original metEAUdata names - don't modify version numbers
+                            col_name = csv_file.replace('.csv', '')
+                            loaded_series = ts_data.iloc[:, 0]
+                            df[col_name] = loaded_series
+
+                        # Don't create a Signal object here - parsing issues with multiple #
+                        # Export cell will create Signal from DataFrame to preserve all series
+                        original_signal = None
+
+                    import_type = "meteaudata"
+                    original_dataset = None
+    original_signal = (
+        original_signal
+        if "original_signal" in dir() or "original_signal" in locals()
+        else None
+    )
+    original_dataset = (
+        original_dataset
+        if "original_dataset" in dir() or "original_dataset" in locals()
+        else None
+    )
+    return df, import_type, original_dataset, original_signal
 
 
 @app.cell
-def _(df, mo, pd):
+def _(df, import_type, mo, pd):
     _cols = list(df.columns)
     _time_options = {}
     if isinstance(df.index, pd.DatetimeIndex):
@@ -191,7 +349,7 @@ def _(df, mo, pd):
     value_col = mo.ui.dropdown(
         options={c: c for c in _num_cols},
         value=_num_cols[0] if _num_cols else None,
-        label="Value column",
+        label="Value column" + (" (TimeSeries)" if import_type == "meteaudata" else ""),
     )
     mo.hstack([time_col, value_col], justify="start", gap=1)
     return time_col, value_col
@@ -447,9 +605,15 @@ def _(
         set_sine_phases(_phase_vals)
 
         # Do same for weekend
-        _weekend_amp_vals = list(_weekend_amp_vals[:_n]) + [0.15] * max(0, _n - len(_weekend_amp_vals))
-        _weekend_freq_vals = list(_weekend_freq_vals[:_n]) + [2.0] * max(0, _n - len(_weekend_freq_vals))
-        _weekend_phase_vals = list(_weekend_phase_vals[:_n]) + [13.0] * max(0, _n - len(_weekend_phase_vals))
+        _weekend_amp_vals = list(_weekend_amp_vals[:_n]) + [0.15] * max(
+            0, _n - len(_weekend_amp_vals)
+        )
+        _weekend_freq_vals = list(_weekend_freq_vals[:_n]) + [2.0] * max(
+            0, _n - len(_weekend_freq_vals)
+        )
+        _weekend_phase_vals = list(_weekend_phase_vals[:_n]) + [13.0] * max(
+            0, _n - len(_weekend_phase_vals)
+        )
         set_weekend_amplitudes(_weekend_amp_vals)
         set_weekend_frequencies(_weekend_freq_vals)
         set_weekend_phases(_weekend_phase_vals)
@@ -460,6 +624,7 @@ def _(
             _vals = list(get_sine_amplitudes())
             _vals[index] = value
             set_sine_amplitudes(_vals)
+
         return handler
 
     def make_frequency_handler(index):
@@ -467,6 +632,7 @@ def _(
             _vals = list(get_sine_frequencies())
             _vals[index] = value
             set_sine_frequencies(_vals)
+
         return handler
 
     def make_phase_handler(index):
@@ -474,6 +640,7 @@ def _(
             _vals = list(get_sine_phases())
             _vals[index] = value
             set_sine_phases(_vals)
+
         return handler
 
     # Similar handlers for weekend
@@ -482,6 +649,7 @@ def _(
             _vals = list(get_weekend_amplitudes())
             _vals[index] = value
             set_weekend_amplitudes(_vals)
+
         return handler
 
     def make_weekend_frequency_handler(index):
@@ -489,6 +657,7 @@ def _(
             _vals = list(get_weekend_frequencies())
             _vals[index] = value
             set_weekend_frequencies(_vals)
+
         return handler
 
     def make_weekend_phase_handler(index):
@@ -496,6 +665,7 @@ def _(
             _vals = list(get_weekend_phases())
             _vals[index] = value
             set_weekend_phases(_vals)
+
         return handler
 
     # Weekday sliders
@@ -1500,6 +1670,187 @@ def _(
 
     plt.tight_layout()
     _fig
+    return
+
+
+@app.cell
+def _(
+    Signal,
+    active_patterns,
+    base64,
+    blend_minutes_slider,
+    df,
+    import_type,
+    mo,
+    normalize_checkbox,
+    original_dataset,
+    original_signal,
+    pattern_fill,
+    series,
+    shutil,
+    tempfile,
+):
+    mo.stop(
+        not active_patterns,
+        mo.callout(mo.md("No pattern configured yet."), kind="warn"),
+    )
+
+    if len(active_patterns) == 1 and "all days" in active_patterns:
+        _pat_arg = active_patterns["all days"]
+    else:
+        _pat_arg = active_patterns
+
+    def create_meteaudata_download(
+        series,
+        df_all,
+        pattern_arg,
+        normalize,
+        blend_minutes,
+        import_type,
+        original_signal,
+        original_dataset,
+    ):
+        if import_type == "meteaudata" and original_dataset is not None:
+            # Handle Dataset case
+            # series.name format: "signal_name.time_series_name"
+            if "." in series.name:
+                sig_name, ts_name = series.name.split(".", 1)
+            else:
+                sig_name = list(original_dataset.signals.keys())[0]
+                ts_name = series.name
+
+            # Get the specific signal from the dataset
+            target_signal = original_dataset.signals[sig_name].model_copy(deep=True)
+
+            # Apply pattern_fill to the signal
+            target_signal = target_signal.process(
+                [ts_name],
+                pattern_fill,
+                pattern=pattern_arg,
+                scaling="local",
+                normalize=normalize,
+                blend_minutes=blend_minutes,
+            )
+
+            # Update the dataset with the processed signal
+            dataset = original_dataset.model_copy(deep=True)
+            dataset._signals[sig_name] = target_signal
+
+            # Save and export the entire dataset
+            with tempfile.TemporaryDirectory() as tmpdir:
+                dataset.save(tmpdir)
+                zip_path = f"{tmpdir}/{dataset.name}.zip"
+                shutil.make_archive(
+                    zip_path.replace(".zip", ""),
+                    "zip",
+                    tmpdir,
+                )
+
+                with open(f"{zip_path}", "rb") as f:
+                    zip_contents = f.read()
+
+                b64 = base64.b64encode(zip_contents).decode()
+                href = f"data:application/zip;base64,{b64}"
+
+                download_link = mo.md(
+                    f'<a href="{href}" download="{dataset.name}_filled.zip" style="'
+                    "background-color: #4CAF50; color: white; padding: 10px 20px; "
+                    'text-decoration: none; border-radius: 4px; font-size: 16px;">'
+                    "📥 Download metEAUdata Dataset (ZIP)</a>"
+                )
+
+                return mo.vstack(
+                    [
+                        mo.md("### Download Processed Data"),
+                        mo.md(
+                            "Click the button below to download the processed data as a metEAUdata Dataset:"
+                        ),
+                        download_link,
+                    ]
+                )
+
+        # Handle Signal case (existing Signal or create new one)
+        # NOTE: Signal name must not contain underscores - metEAUdata uses underscore as delimiter
+        signal_name = original_signal.name if original_signal else "pattern-filled"
+
+        if import_type == "meteaudata" and original_signal is not None:
+            # Use the original Signal - it already has all the data
+            signal = original_signal.model_copy(deep=True)
+            # Use the series name from the original data
+            ts_name_to_process = series.name
+        else:
+            # Create a new Signal from the selected column only
+            # When creating from scratch (CSV/DataFrame), just process the selected series
+
+            # Clean the series name to avoid metEAUdata parsing issues with multiple #
+            # metEAUdata expects names like "base#version", not "base#1#2"
+            clean_series = df_all[series.name].copy()
+            if '#' in str(series.name):
+                # Extract just the base name before the first #
+                base_name = str(series.name).split('#')[0]
+                clean_series.name = base_name
+            else:
+                clean_series.name = str(series.name)
+
+            signal = Signal(
+                input_data=clean_series,
+                name=signal_name,
+                units="unknown",
+            )
+            ts_name_to_process = clean_series.name
+
+        # Apply pattern_fill using Signal.process()
+        signal = signal.process(
+            [ts_name_to_process],
+            pattern_fill,
+            pattern=pattern_arg,
+            scaling="local",
+            normalize=normalize,
+            blend_minutes=blend_minutes,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            signal.save(f"{tmpdir}/{signal_name}")
+            zip_path = f"{tmpdir}/{signal_name}.zip"
+            shutil.make_archive(
+                zip_path.replace(".zip", ""),
+                "zip",
+                f"{tmpdir}/{signal_name}",
+            )
+
+            with open(f"{zip_path}", "rb") as f:
+                zip_contents = f.read()
+
+            b64 = base64.b64encode(zip_contents).decode()
+            href = f"data:application/zip;base64,{b64}"
+
+            download_link = mo.md(
+                f'<a href="{href}" download="{signal_name}_filled.zip" style="'
+                "background-color: #4CAF50; color: white; padding: 10px 20px; "
+                'text-decoration: none; border-radius: 4px; font-size: 16px;">'
+                "📥 Download metEAUdata Signal (ZIP)</a>"
+            )
+
+            return mo.vstack(
+                [
+                    mo.md("### Download Processed Data"),
+                    mo.md(
+                        "Click the button below to download the processed data as a metEAUdata Signal:"
+                    ),
+                    download_link,
+                ]
+            )
+
+    create_meteaudata_download(
+        series,
+        df,
+        _pat_arg,
+        normalize_checkbox.value,
+        blend_minutes_slider.value,
+        import_type,
+        original_signal,
+        original_dataset,
+    )
     return
 
 
