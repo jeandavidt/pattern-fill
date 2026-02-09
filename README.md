@@ -2,6 +2,12 @@
 
 A metadata-aware implementation of pattern fill algorithms for gap-filling time series data using daily diurnal patterns.
 
+## 🎮 Try it Online
+
+**[Launch Interactive Pattern Designer →](https://jeandavidt.github.io/pattern-fill/)**
+
+Design and test patterns directly in your browser using our WASM-powered marimo notebook. No installation required!
+
 ## Features
 
 - **Dual pattern modes**: Spline-based (traditional) and Sine wave-based (new)
