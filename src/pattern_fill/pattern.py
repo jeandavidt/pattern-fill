@@ -75,15 +75,15 @@ class DailyPattern:
 
     The pattern is normalized to the 0-1 range and can be created in two ways:
 
-    **Spline Mode (existing)**:
+    **Spline Mode**:
         Cubic spline through user-defined control points (hours, values).
 
-    **Sine Mode (new)**:
+    **Sine Mode**:
         Sum of sine wave components with configurable amplitude, frequency, and phase.
 
     Examples
     --------
-    Spline mode (existing):
+    Spline mode:
 
     >>> pattern = DailyPattern(
     ...     hours=[0, 6, 12, 18],
