@@ -5,6 +5,33 @@ app = marimo.App(width="medium")
 
 
 @app.cell
+async def _():
+    """Install packages not in Pyodide when running in WASM."""
+    import sys
+
+    # Check if we're running in Pyodide (WASM environment)
+    if "pyodide" in sys.modules:
+        import micropip
+        import js
+
+        # Install/upgrade dependencies first
+        await micropip.install("typing-extensions>=4.12.0")
+        await micropip.install("wigglystuff>=0.2.21")
+
+        # Build absolute URL for the bundled wheel using browser's origin (not href!)
+        # js.location.origin = "http://localhost:8000" (no path)
+        # js.location.href = "http://localhost:8000/index.html" or "/assets/index.html"
+        base_url = str(js.location.origin)
+        wheel_url = f"{base_url}/wheels/pattern_fill-0.1.0-py3-none-any.whl"
+
+        # Install pattern-fill directly from the URL
+        print(f"📦 Installing pattern-fill from: {wheel_url}")
+        await micropip.install(wheel_url)
+        print("✅ All packages installed successfully!")
+    return
+
+
+@app.cell
 def _():
     import marimo as mo
     import numpy as np
@@ -59,17 +86,6 @@ def _(mo):
     - **Sine Waves**: Combine multiple sine waves with adjustable amplitude, frequency, and phase
     """)
     return
-
-
-@app.cell
-def _(mo):
-    pattern_mode = mo.ui.radio(
-        options=["Spline", "Sine Waves"],
-        value="Spline",
-        label="Pattern type",
-    )
-    pattern_mode
-    return (pattern_mode,)
 
 
 @app.cell
@@ -182,18 +198,6 @@ def _(df, mo, pd):
 
 
 @app.cell
-def _(df, mo, value_col):
-    mo.md(f"""
-    **Debug info:**
-    - DataFrame columns: {list(df.columns)}
-    - DataFrame shape: {df.shape}
-    - value_col.value: {value_col.value}
-    - value_col.value is None: {value_col.value is None}
-    """)
-    return
-
-
-@app.cell
 def _(df, mo, pd, time_col, value_col):
     mo.stop(
         value_col.value is None,
@@ -237,6 +241,17 @@ def _(pd, plt, series):
 
 
 @app.cell
+def _(mo):
+    pattern_mode = mo.ui.radio(
+        options=["Spline", "Sine Waves"],
+        value="Spline",
+        label="Pattern type",
+    )
+    pattern_mode
+    return (pattern_mode,)
+
+
+@app.cell
 def _(mo, pattern_mode):
     """Configure day type and count for pattern editing."""
 
@@ -276,14 +291,13 @@ def _(mo, pattern_mode):
     n_components_slider = None
 
     if pattern_mode.value == "Spline":
-        # Number of control points (pucks) slider
-        n_points_slider = mo.ui.slider(
+        # Number of control points (pucks) input
+        n_points_slider = mo.ui.number(
             start=4,
             stop=24,
             step=1,
             value=8,
             label="Number of pucks",
-            show_value=True,
         )
 
         _out = mo.hstack(
@@ -300,13 +314,12 @@ def _(mo, pattern_mode):
         )
     else:  # Sine Waves mode
         # Number of sine wave components
-        n_components_slider = mo.ui.slider(
+        n_components_slider = mo.ui.number(
             start=1,
             stop=5,
             step=1,
             value=2,
             label="Number of sine waves",
-            show_value=True,
         )
 
         _out = mo.hstack(
@@ -334,21 +347,168 @@ def _(mo, pattern_mode):
 
 
 @app.cell
-def _(day_type_radio, mo, n_components_slider, pattern_mode):
-    """Create sliders for sine wave parameters - weekday and optional weekend."""
+def _(mo, n_components_slider, pattern_mode):
+    """State management for sine wave parameters.
+
+    This cell always runs (no mo.stop) to ensure state variables are always available,
+    even when not in Sine mode.
+    """
+    # Determine n_components for default initialization
+    # Use 2 as default if slider doesn't exist yet or we're not in Sine mode
+    if pattern_mode.value == "Sine Waves" and n_components_slider is not None:
+        _n = n_components_slider.value
+    else:
+        _n = 2
+
+    # Default values for initial state
+    _default_amplitudes = [0.3 if i == 0 else 0.15 for i in range(_n)]
+    _default_frequencies = [1.0 if i == 0 else 2.0 for i in range(_n)]
+    _default_phases = [8.0 if i == 0 else 13.0 for i in range(_n)]
+    _default_baseline = 0.5
+
+    # Weekday parameter states
+    get_sine_amplitudes, set_sine_amplitudes = mo.state(_default_amplitudes)
+    get_sine_frequencies, set_sine_frequencies = mo.state(_default_frequencies)
+    get_sine_phases, set_sine_phases = mo.state(_default_phases)
+    get_sine_baseline, set_sine_baseline = mo.state(_default_baseline)
+
+    # Weekend parameter states
+    get_weekend_amplitudes, set_weekend_amplitudes = mo.state(_default_amplitudes)
+    get_weekend_frequencies, set_weekend_frequencies = mo.state(_default_frequencies)
+    get_weekend_phases, set_weekend_phases = mo.state(_default_phases)
+    get_weekend_baseline, set_weekend_baseline = mo.state(_default_baseline)
+    return (
+        get_sine_amplitudes,
+        get_sine_baseline,
+        get_sine_frequencies,
+        get_sine_phases,
+        get_weekend_amplitudes,
+        get_weekend_baseline,
+        get_weekend_frequencies,
+        get_weekend_phases,
+        set_sine_amplitudes,
+        set_sine_baseline,
+        set_sine_frequencies,
+        set_sine_phases,
+        set_weekend_amplitudes,
+        set_weekend_baseline,
+        set_weekend_frequencies,
+        set_weekend_phases,
+    )
+
+
+@app.cell
+def _(
+    day_type_radio,
+    get_sine_amplitudes,
+    get_sine_baseline,
+    get_sine_frequencies,
+    get_sine_phases,
+    get_weekend_amplitudes,
+    get_weekend_baseline,
+    get_weekend_frequencies,
+    get_weekend_phases,
+    mo,
+    n_components_slider,
+    pattern_mode,
+    set_sine_amplitudes,
+    set_sine_baseline,
+    set_sine_frequencies,
+    set_sine_phases,
+    set_weekend_amplitudes,
+    set_weekend_baseline,
+    set_weekend_frequencies,
+    set_weekend_phases,
+):
+    """Create sliders for sine wave parameters - values driven by state."""
     mo.stop(pattern_mode.value != "Sine Waves" or n_components_slider is None)
 
     _n = n_components_slider.value
 
+    # Get current state values
+    _amp_vals = get_sine_amplitudes()
+    _freq_vals = get_sine_frequencies()
+    _phase_vals = get_sine_phases()
+    _baseline_val = get_sine_baseline()
+
+    _weekend_amp_vals = get_weekend_amplitudes()
+    _weekend_freq_vals = get_weekend_frequencies()
+    _weekend_phase_vals = get_weekend_phases()
+    _weekend_baseline_val = get_weekend_baseline()
+
+    # Ensure state has correct length (handle n_components changes)
+    if len(_amp_vals) != _n:
+        # Preserve existing values and add defaults for new components
+        _amp_vals = list(_amp_vals[:_n]) + [0.15] * max(0, _n - len(_amp_vals))
+        _freq_vals = list(_freq_vals[:_n]) + [2.0] * max(0, _n - len(_freq_vals))
+        _phase_vals = list(_phase_vals[:_n]) + [13.0] * max(0, _n - len(_phase_vals))
+        set_sine_amplitudes(_amp_vals)
+        set_sine_frequencies(_freq_vals)
+        set_sine_phases(_phase_vals)
+
+        # Do same for weekend
+        _weekend_amp_vals = list(_weekend_amp_vals[:_n]) + [0.15] * max(0, _n - len(_weekend_amp_vals))
+        _weekend_freq_vals = list(_weekend_freq_vals[:_n]) + [2.0] * max(0, _n - len(_weekend_freq_vals))
+        _weekend_phase_vals = list(_weekend_phase_vals[:_n]) + [13.0] * max(0, _n - len(_weekend_phase_vals))
+        set_weekend_amplitudes(_weekend_amp_vals)
+        set_weekend_frequencies(_weekend_freq_vals)
+        set_weekend_phases(_weekend_phase_vals)
+
+    # Create on_change handlers
+    def make_amplitude_handler(index):
+        def handler(value):
+            _vals = list(get_sine_amplitudes())
+            _vals[index] = value
+            set_sine_amplitudes(_vals)
+        return handler
+
+    def make_frequency_handler(index):
+        def handler(value):
+            _vals = list(get_sine_frequencies())
+            _vals[index] = value
+            set_sine_frequencies(_vals)
+        return handler
+
+    def make_phase_handler(index):
+        def handler(value):
+            _vals = list(get_sine_phases())
+            _vals[index] = value
+            set_sine_phases(_vals)
+        return handler
+
+    # Similar handlers for weekend
+    def make_weekend_amplitude_handler(index):
+        def handler(value):
+            _vals = list(get_weekend_amplitudes())
+            _vals[index] = value
+            set_weekend_amplitudes(_vals)
+        return handler
+
+    def make_weekend_frequency_handler(index):
+        def handler(value):
+            _vals = list(get_weekend_frequencies())
+            _vals[index] = value
+            set_weekend_frequencies(_vals)
+        return handler
+
+    def make_weekend_phase_handler(index):
+        def handler(value):
+            _vals = list(get_weekend_phases())
+            _vals[index] = value
+            set_weekend_phases(_vals)
+        return handler
+
+    # Weekday sliders
     sine_amplitude_sliders = mo.ui.array(
         [
             mo.ui.slider(
                 start=0.0,
-                stop=0.5,
+                stop=1.0,
                 step=0.01,
-                value=0.3 if i == 0 else 0.15,
+                value=_amp_vals[i],
                 label=f"Wave {i + 1} Amplitude",
                 show_value=True,
+                on_change=make_amplitude_handler(i),
             )
             for i in range(_n)
         ]
@@ -357,12 +517,13 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
     sine_frequency_sliders = mo.ui.array(
         [
             mo.ui.slider(
-                start=0.5,
-                stop=4.0,
-                step=0.5,
-                value=1.0 if i == 0 else 2.0,
+                start=0.08333,
+                stop=12.0,
+                step=0.125,
+                value=_freq_vals[i],
                 label=f"Wave {i + 1} Frequency",
                 show_value=True,
+                on_change=make_frequency_handler(i),
             )
             for i in range(_n)
         ]
@@ -374,9 +535,10 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
                 start=0.0,
                 stop=24.0,
                 step=0.5,
-                value=8.0 if i == 0 else 13.0,
+                value=_phase_vals[i],
                 label=f"Wave {i + 1} Phase (hour)",
                 show_value=True,
+                on_change=make_phase_handler(i),
             )
             for i in range(_n)
         ]
@@ -386,20 +548,23 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
         start=0.0,
         stop=1.0,
         step=0.01,
-        value=0.5,
+        value=_baseline_val,
         label="Baseline",
         show_value=True,
+        on_change=set_sine_baseline,
     )
 
+    # Weekend sliders
     weekend_sine_amplitude_sliders = mo.ui.array(
         [
             mo.ui.slider(
                 start=0.0,
                 stop=0.5,
                 step=0.01,
-                value=0.3 if i == 0 else 0.15,
+                value=_weekend_amp_vals[i],
                 label=f"Weekend Wave {i + 1} Amplitude",
                 show_value=True,
+                on_change=make_weekend_amplitude_handler(i),
             )
             for i in range(_n)
         ]
@@ -411,9 +576,10 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
                 start=0.5,
                 stop=4.0,
                 step=0.5,
-                value=1.0 if i == 0 else 2.0,
+                value=_weekend_freq_vals[i],
                 label=f"Weekend Wave {i + 1} Frequency",
                 show_value=True,
+                on_change=make_weekend_frequency_handler(i),
             )
             for i in range(_n)
         ]
@@ -425,9 +591,10 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
                 start=0.0,
                 stop=24.0,
                 step=0.5,
-                value=8.0 if i == 0 else 13.0,
+                value=_weekend_phase_vals[i],
                 label=f"Weekend Wave {i + 1} Phase (hour)",
                 show_value=True,
+                on_change=make_weekend_phase_handler(i),
             )
             for i in range(_n)
         ]
@@ -437,11 +604,13 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
         start=0.0,
         stop=1.0,
         step=0.01,
-        value=0.5,
+        value=_weekend_baseline_val,
         label="Weekend Baseline",
         show_value=True,
+        on_change=set_weekend_baseline,
     )
 
+    # Display layout (same as before)
     _weekday_rows = []
     for i in range(_n):
         _weekday_rows.append(
@@ -494,16 +663,7 @@ def _(day_type_radio, mo, n_components_slider, pattern_mode):
 
     slider_display = mo.vstack(_elements, gap=1)
     slider_display
-    return (
-        sine_amplitude_sliders,
-        sine_baseline_slider,
-        sine_frequency_sliders,
-        sine_phase_sliders,
-        weekend_sine_amplitude_sliders,
-        weekend_sine_baseline_slider,
-        weekend_sine_frequency_sliders,
-        weekend_sine_phase_sliders,
-    )
+    return
 
 
 @app.cell
@@ -595,20 +755,28 @@ def _(
     fit_checkbox,
     fit_pattern,
     fit_sine_pattern,
+    get_sine_amplitudes,
+    get_sine_baseline,
+    get_sine_frequencies,
+    get_sine_phases,
+    get_weekend_amplitudes,
+    get_weekend_baseline,
+    get_weekend_frequencies,
+    get_weekend_phases,
     mo,
     n_components_slider,
     n_points_slider,
     np,
     pattern_mode,
     series,
-    sine_amplitude_sliders,
-    sine_baseline_slider,
-    sine_frequency_sliders,
-    sine_phase_sliders,
-    weekend_sine_amplitude_sliders,
-    weekend_sine_baseline_slider,
-    weekend_sine_frequency_sliders,
-    weekend_sine_phase_sliders,
+    set_sine_amplitudes,
+    set_sine_baseline,
+    set_sine_frequencies,
+    set_sine_phases,
+    set_weekend_amplitudes,
+    set_weekend_baseline,
+    set_weekend_frequencies,
+    set_weekend_phases,
 ):
     fitted_patterns = {}
     _is_fit_mode = fit_checkbox.value
@@ -626,6 +794,8 @@ def _(
                 )
             else:
                 # Initialize with uniform values when not fitting
+                # Note: editor_patterns state keeps puck positions separately,
+                # so this doesn't reset the pucks (they read from editor_patterns, not fitted_patterns)
                 _hours = (
                     np.linspace(0, 24 - 24.0 / (_n_points - 1), _n_points)
                     if _n_points > 1
@@ -652,6 +822,9 @@ def _(
                     day_type="weekend",
                 )
             else:
+                # Initialize with uniform values when not fitting
+                # Note: editor_patterns state keeps puck positions separately,
+                # so this doesn't reset the pucks (they read from editor_patterns, not fitted_patterns)
                 _hours = (
                     np.linspace(0, 24 - 24.0 / (_n_points - 1), _n_points)
                     if _n_points > 1
@@ -677,30 +850,54 @@ def _(
 
         if day_type_radio.value == "all days":
             if _is_fit_mode:
+                # Fit the pattern
                 fitted_patterns["all days"] = fit_sine_pattern(
                     series,
                     n_components=_n_components,
                     day_type="all",
                 )
+
+                # Extract fitted parameters and update state
+                _fitted_pat = fitted_patterns["all days"]
+                _new_amps = [c.amplitude for c in _fitted_pat.sine_components]
+                _new_freqs = [c.frequency for c in _fitted_pat.sine_components]
+                _new_phases = [c.phase for c in _fitted_pat.sine_components]
+
+                set_sine_amplitudes(_new_amps)
+                set_sine_frequencies(_new_freqs)
+                set_sine_phases(_new_phases)
+                set_sine_baseline(_fitted_pat.baseline)
             else:
-                # Use manual slider values
+                # Read from state (already updated by sliders)
+                _amps = get_sine_amplitudes()
+                _freqs = get_sine_frequencies()
+                _phases = get_sine_phases()
+                _baseline = get_sine_baseline()
+
+                # Ensure state has enough values (pad with defaults if needed)
+                while len(_amps) < _n_components:
+                    _amps = list(_amps) + [0.15]
+                    _freqs = list(_freqs) + [2.0]
+                    _phases = list(_phases) + [13.0]
+
                 _components = [
                     SineComponent(
-                        amplitude=sine_amplitude_sliders[i].value,
-                        frequency=sine_frequency_sliders[i].value,
-                        phase=sine_phase_sliders[i].value,
+                        amplitude=_amps[i],
+                        frequency=_freqs[i],
+                        phase=_phases[i],
                     )
                     for i in range(_n_components)
                 ]
                 fitted_patterns["all days"] = DailyPattern(
                     sine_components=_components,
-                    baseline=sine_baseline_slider.value,
+                    baseline=_baseline,
                     name="manual_sine",
                     day_type="all",
                 )
         else:  # weekdays + weekends
             _wd_mask = series.index.dayofweek < 5
             if _is_fit_mode:
+                # Fit both patterns
                 fitted_patterns["weekday"] = fit_sine_pattern(
                     series[_wd_mask],
                     n_components=_n_components,
@@ -711,34 +908,71 @@ def _(
                     n_components=_n_components,
                     day_type="weekend",
                 )
+
+                # Extract and update state for weekday
+                _wd_pat = fitted_patterns["weekday"]
+                set_sine_amplitudes([c.amplitude for c in _wd_pat.sine_components])
+                set_sine_frequencies([c.frequency for c in _wd_pat.sine_components])
+                set_sine_phases([c.phase for c in _wd_pat.sine_components])
+                set_sine_baseline(_wd_pat.baseline)
+
+                # Extract and update state for weekend
+                _we_pat = fitted_patterns["weekend"]
+                set_weekend_amplitudes([c.amplitude for c in _we_pat.sine_components])
+                set_weekend_frequencies([c.frequency for c in _we_pat.sine_components])
+                set_weekend_phases([c.phase for c in _we_pat.sine_components])
+                set_weekend_baseline(_we_pat.baseline)
             else:
-                # Use manual slider values for weekday
+                # Read from state for weekday
+                _amps = get_sine_amplitudes()
+                _freqs = get_sine_frequencies()
+                _phases = get_sine_phases()
+                _baseline = get_sine_baseline()
+
+                # Ensure state has enough values (pad with defaults if needed)
+                while len(_amps) < _n_components:
+                    _amps = list(_amps) + [0.15]
+                    _freqs = list(_freqs) + [2.0]
+                    _phases = list(_phases) + [13.0]
+
                 _components = [
                     SineComponent(
-                        amplitude=sine_amplitude_sliders[i].value,
-                        frequency=sine_frequency_sliders[i].value,
-                        phase=sine_phase_sliders[i].value,
+                        amplitude=_amps[i],
+                        frequency=_freqs[i],
+                        phase=_phases[i],
                     )
                     for i in range(_n_components)
                 ]
                 fitted_patterns["weekday"] = DailyPattern(
                     sine_components=_components,
-                    baseline=sine_baseline_slider.value,
+                    baseline=_baseline,
                     name="manual_sine_weekday",
                     day_type="weekday",
                 )
-                # Use separate weekend sliders for weekend pattern
+
+                # Read from state for weekend
+                _weekend_amps = get_weekend_amplitudes()
+                _weekend_freqs = get_weekend_frequencies()
+                _weekend_phases = get_weekend_phases()
+                _weekend_baseline = get_weekend_baseline()
+
+                # Ensure state has enough values (pad with defaults if needed)
+                while len(_weekend_amps) < _n_components:
+                    _weekend_amps = list(_weekend_amps) + [0.15]
+                    _weekend_freqs = list(_weekend_freqs) + [2.0]
+                    _weekend_phases = list(_weekend_phases) + [13.0]
+
                 _weekend_components = [
                     SineComponent(
-                        amplitude=weekend_sine_amplitude_sliders[i].value,
-                        frequency=weekend_sine_frequency_sliders[i].value,
-                        phase=weekend_sine_phase_sliders[i].value,
+                        amplitude=_weekend_amps[i],
+                        frequency=_weekend_freqs[i],
+                        phase=_weekend_phases[i],
                     )
                     for i in range(_n_components)
                 ]
                 fitted_patterns["weekend"] = DailyPattern(
                     sine_components=_weekend_components,
-                    baseline=weekend_sine_baseline_slider.value,
+                    baseline=_weekend_baseline,
                     name="manual_sine_weekend",
                     day_type="weekend",
                 )
@@ -746,16 +980,30 @@ def _(
 
 
 @app.cell
-def _(fitted_patterns, mo):
-    """Create mo.state to hold committed puck positions.
+def _(fit_checkbox, fitted_patterns, mo):
+    """Create mo.state to hold editor UI state and committed patterns.
 
-    Initialized with the auto-fitted patterns. Updated when the user clicks
-    "Apply Pattern" in the display cell. Downstream cells depend on
-    get_committed_patterns rather than the puck widget directly, so they
-    only re-execute on explicit Apply, not on every mouse-move during drag.
+    editor_patterns: Holds the UI state for spline mode (puck positions).
+                     For sine mode, dedicated parameter states are used instead
+                     (see sine parameter state cell).
+                     When autofit toggles ON, it's updated to the fitted values.
+                     When autofit toggles OFF, it stays where it is.
+
+    committed_patterns: The patterns that were last applied for gap-fill preview.
     """
+    get_editor_patterns, set_editor_patterns = mo.state(fitted_patterns)
     get_committed_patterns, set_committed_patterns = mo.state(fitted_patterns)
-    return get_committed_patterns, set_committed_patterns
+
+    # Update editor state when fit_checkbox changes to True
+    # (fitted_patterns already contains the new values)
+    if fit_checkbox.value:
+        set_editor_patterns(fitted_patterns)
+    return (
+        get_committed_patterns,
+        get_editor_patterns,
+        set_committed_patterns,
+        set_editor_patterns,
+    )
 
 
 @app.cell
@@ -763,14 +1011,18 @@ def _(
     ChartPuck,
     DailyPattern,
     day_type_radio,
-    fitted_patterns,
+    get_editor_patterns,
     mo,
     n_points_slider,
     np,
     pattern_mode,
     silhouette_data,
 ):
-    """Create ChartPuck widgets with real-time spline updates."""
+    """Create ChartPuck widgets with real-time spline updates.
+
+    Pucks are initialized from editor_patterns, which persists user edits
+    even when autofit is toggled off.
+    """
     mo.stop(pattern_mode.value != "Spline" or n_points_slider is None)
 
     def make_draw_fn(silhouette, title_suffix="", dt_key="all"):
@@ -829,12 +1081,15 @@ def _(
 
         return draw_chart
 
+    # Use editor_patterns (persisted state) instead of fitted_patterns
+    editor_patterns = get_editor_patterns()
+
     puck_all = None
     puck_weekday = None
     puck_weekend = None
 
     if day_type_radio.value == "all days":
-        _pat = fitted_patterns.get("all days")
+        _pat = editor_patterns.get("all days")
         _sil = silhouette_data.get("all days")
         if _pat and len(_pat.hours) > 0:
             puck_all = ChartPuck.from_callback(
@@ -851,7 +1106,7 @@ def _(
             )
     else:  # weekdays + weekends
         for dt_key in ["weekday", "weekend"]:
-            _pat = fitted_patterns.get(dt_key)
+            _pat = editor_patterns.get(dt_key)
             _sil = silhouette_data.get(dt_key)
             if _pat and len(_pat.hours) > 0:
                 _puck = ChartPuck.from_callback(
@@ -883,11 +1138,12 @@ def _(
     puck_weekday,
     puck_weekend,
     set_committed_patterns,
+    set_editor_patterns,
 ):
     """Display PuckChart widgets with Apply button.
 
     Charts auto-update as pucks are dragged via from_callback.
-    Apply button commits current positions to mo.state for gap-fill preview.
+    Apply button commits current positions to both mo.state and editor_patterns.
     """
 
     def _apply_patterns(_):
@@ -916,6 +1172,8 @@ def _(
                     day_type="weekend",
                 )
         set_committed_patterns(_patterns)
+        # Also update editor state so if user toggles autofit again, they start from here
+        set_editor_patterns(_patterns)
 
     _apply_button = mo.ui.button(
         label="✅ Apply Pattern",
@@ -1006,11 +1264,12 @@ def _(
     plt,
     profiles,
     set_committed_patterns,
+    set_editor_patterns,
 ):
     """Display sine wave patterns with Apply button.
 
     Charts update automatically when sliders change (marimo reactivity).
-    Apply button commits patterns to mo.state for gap-fill preview.
+    Apply button commits patterns to both committed and editor states.
     """
     mo.stop(pattern_mode.value != "Sine Waves" or n_components_slider is None)
 
@@ -1096,6 +1355,8 @@ def _(
             _patterns["weekday"] = fitted_patterns.get("weekday")
             _patterns["weekend"] = fitted_patterns.get("weekend")
         set_committed_patterns(_patterns)
+        # Also update editor state so if user toggles autofit again, they start from here
+        set_editor_patterns(_patterns)
 
     _apply_button = mo.ui.button(
         label="✅ Apply Pattern",
