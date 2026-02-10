@@ -16,6 +16,7 @@ async def _():
         # Install dependencies from PyPI
         print("📦 Installing dependencies from PyPI...")
         await micropip.install("wigglystuff>=0.2.21")
+        await micropip.install("altair>=5.0.0,<6.0.0")
         await micropip.install("pattern-fill")
         print("✅ All packages installed successfully!")
     return
