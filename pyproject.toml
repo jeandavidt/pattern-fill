@@ -1,6 +1,6 @@
 [project]
 name = "pattern-fill"
-version = "0.1.2a"
+version = "0.1.2"
 description = "Time series gap-filling using daily diurnal patterns"
 readme = "README.md"
 requires-python = ">=3.10"
