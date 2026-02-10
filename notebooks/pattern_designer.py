@@ -27,6 +27,7 @@ def _():
     import marimo as mo
     import numpy as np
     import pandas as pd
+    import altair as alt
     import matplotlib.pyplot as plt
     from wigglystuff import ChartPuck
     from pattern_fill import (
@@ -51,6 +52,7 @@ def _():
         Dataset,
         Signal,
         SineComponent,
+        alt,
         base64,
         fit_pattern,
         fit_sine_pattern,
@@ -366,11 +368,17 @@ def _(df, mo, pd, time_col, value_col):
 
 
 @app.cell
-def _(pd, plt, series):
-    _fig, _ax = plt.subplots(figsize=(12, 3))
-    _valid = series.dropna()
-    _ax.plot(_valid.index, _valid.values, linewidth=0.8, color="steelblue")
+def _(alt, pd, series):
+    # Prepare data for Altair
+    _df = pd.DataFrame({
+        "time": series.index,
+        "value": series.values,
+        "is_gap": series.isna()
+    })
+
+    # Calculate gap regions for highlighting
     _nan_mask = series.isna()
+    _gap_rects = []
     if _nan_mask.any():
         _changes = _nan_mask.astype(int).diff().fillna(0)
         _starts = series.index[_changes == 1]
@@ -380,12 +388,40 @@ def _(pd, plt, series):
         if _nan_mask.iloc[-1]:
             _ends = _ends.append(pd.DatetimeIndex([series.index[-1]]))
         for _s, _e in zip(_starts, _ends):
-            _ax.axvspan(_s, _e, alpha=0.2, color="red")
-    _ax.set_title("Raw series (red = gaps)")
-    _ax.set_xlabel("Time")
-    _ax.set_ylabel(series.name)
-    plt.tight_layout()
-    _fig
+            _gap_rects.append({"start": _s, "end": _e})
+
+    # Base chart with valid data
+    _valid_df = _df[_df["is_gap"] == False].copy()
+
+    _chart = alt.Chart(_valid_df).mark_line(
+        color="steelblue",
+        strokeWidth=0.8
+    ).encode(
+        x=alt.X("time:T", title="Time"),
+        y=alt.Y("value:Q", title=series.name)
+    )
+
+    # Add gap regions as highlighted rectangles
+    if _gap_rects:
+        _gap_df = pd.DataFrame(_gap_rects)
+        _gap_chart = alt.Chart(_gap_df).mark_rect(
+            color="red",
+            opacity=0.2
+        ).encode(
+            x=alt.X("start:T"),
+            x2=alt.X2("end:T")
+        )
+        _chart = _chart + _gap_chart
+
+    _chart = _chart.properties(
+        title="Raw series (red = gaps)",
+        height=100
+    ).configure_axis(
+        labelFontSize=10,
+        titleFontSize=11
+    )
+
+    _chart
     return
 
 
@@ -1435,12 +1471,17 @@ def _(
     mo.stop(pattern_mode.value != "Sine Waves" or n_components_slider is None)
 
     def _render_sine_chart(stats_df, pattern, title_suffix=""):
-        """Render chart with sine wave pattern."""
-        fig, ax = plt.subplots(figsize=(8, 5))
-        ax.set_xlim(0, 24)
-        ax.set_ylim(-0.1, 1.1)
+        """Render matplotlib chart with sine wave pattern."""
+        fig, ax = plt.subplots(figsize=(6, 3))
 
-        # Plot data silhouette
+        # Generate pattern curve
+        _h = np.linspace(0, 24, 200)
+        _values = pattern.evaluate(_h)
+
+        # Plot pattern
+        ax.plot(_h, _values, "-", color="coral", linewidth=2.5, label="Pattern")
+
+        # Add data silhouette if available
         if stats_df is not None and not stats_df.empty:
             _mean = stats_df["mean"]
             _std = stats_df["std"].fillna(0)
@@ -1452,59 +1493,29 @@ def _(
             else:
                 _norm = lambda v: np.full_like(v, 0.5)
 
-            ax.fill_between(
-                stats_df.index,
-                _norm((_mean - 2 * _std).values),
-                _norm((_mean + 2 * _std).values),
-                color="lightgray",
-                alpha=0.6,
-                label="±2 std dev",
-            )
-            ax.plot(
-                stats_df.index,
-                _norm(_mean.values),
-                "-",
-                color="gray",
-                linewidth=2,
-                alpha=0.7,
-                label="Mean profile",
-            )
+            # Plot silhouette
+            _hours = stats_df.index.values
+            _mean_norm = _norm(_mean.values)
+            _std_lower = _norm((_mean - 2 * _std).values)
+            _std_upper = _norm((_mean + 2 * _std).values)
 
-        # Plot sine wave pattern
-        if pattern is not None:
-            _h = np.linspace(0, 24, 200)
-            _values = pattern.evaluate(_h)
-            ax.plot(
-                _h,
-                _values,
-                "-",
-                color="coral",
-                linewidth=2.5,
-                label="Sine pattern",
-                zorder=3,
-            )
+            ax.fill_between(_hours, _std_lower, _std_upper, color="lightgray", alpha=0.6, label="±2 std dev")
+            ax.plot(_hours, _mean_norm, "-", color="gray", linewidth=2, alpha=0.7, label="Mean profile")
 
-            # Show individual components (if multiple)
-            if pattern.mode == "sine" and len(pattern.sine_components) > 1:
-                for i, comp in enumerate(pattern.sine_components):
-                    _comp_vals = pattern.baseline + comp.evaluate(_h)
-                    ax.plot(
-                        _h,
-                        np.clip(_comp_vals, 0, 1),
-                        "--",
-                        alpha=0.4,
-                        linewidth=1.5,
-                        label=f"Wave {i + 1}",
-                    )
+        # Add individual components if multiple
+        if pattern.mode == "sine" and len(pattern.sine_components) > 1:
+            for i, comp in enumerate(pattern.sine_components):
+                _comp_vals = pattern.baseline + comp.evaluate(_h)
+                ax.plot(_h, np.clip(_comp_vals, 0, 1), "--", color="gray", linewidth=1.5, alpha=0.4, label=f"Wave {i+1}")
 
         ax.set_xlabel("Hour of day")
         ax.set_ylabel("Normalized value (0–1)")
-        ax.legend(loc="upper right", fontsize=9)
+        ax.set_xlim(0, 24)
+        ax.set_ylim(-0.1, 1.1)
+        ax.legend(loc="upper right", fontsize=8)
         ax.grid(True, alpha=0.3)
-        ax.set_title(
-            f"Sine Pattern ({n_components_slider.value} components){title_suffix}"
-        )
-        plt.tight_layout()
+        ax.set_title(f"Sine Pattern ({n_components_slider.value} components){title_suffix}")
+
         return fig
 
     def _apply_sine_patterns(_):
@@ -1544,7 +1555,6 @@ def _(
                     _apply_button,
                 ]
             )
-            plt.close(_fig)
         else:
             _out = mo.callout(mo.md("No sine pattern available."), kind="warn")
     else:  # weekdays + weekends
@@ -1570,8 +1580,6 @@ def _(
                     _apply_button,
                 ]
             )
-            for _f in _figs:
-                plt.close(_f)
         else:
             _out = mo.callout(mo.md("No sine patterns available."), kind="warn")
 
@@ -1596,12 +1604,12 @@ def _(get_committed_patterns, mo):
 @app.cell
 def _(
     active_patterns,
+    alt,
     blend_minutes_slider,
     mo,
     normalize_checkbox,
     pattern_fill,
     pd,
-    plt,
     series,
 ):
     mo.stop(
@@ -1623,11 +1631,17 @@ def _(
     )
     _filled, _steps = _results[0]
 
-    _fig, _axes = plt.subplots(2, 1, figsize=(12, 5), sharex=True)
+    # Prepare data for Altair charts
+    # Before chart: original series with gaps highlighted
+    _before_df = pd.DataFrame({
+        "time": series.index,
+        "value": series.values,
+        "is_gap": series.isna()
+    })
 
-    _ax = _axes[0]
-    _ax.plot(series.index, series.values, linewidth=0.8, color="steelblue")
+    # Calculate gap regions
     _nan_mask = series.isna()
+    _gap_rects = []
     if _nan_mask.any():
         _changes = _nan_mask.astype(int).diff().fillna(0)
         _starts = series.index[_changes == 1]
@@ -1637,30 +1651,117 @@ def _(
         if _nan_mask.iloc[-1]:
             _ends = _ends.append(pd.DatetimeIndex([series.index[-1]]))
         for _s, _e in zip(_starts, _ends):
-            _ax.axvspan(_s, _e, alpha=0.15, color="red")
-    _ax.set_title("Before (with gaps)")
-    _ax.set_ylabel(series.name)
+            _gap_rects.append({"start": _s, "end": _e})
 
-    _ax = _axes[1]
-    _ax.plot(_filled.index, _filled.values, linewidth=0.8, color="steelblue")
-    _filled_mask = series.isna() & _filled.notna()
-    if _filled_mask.any():
-        _ax.plot(
-            _filled.index[_filled_mask],
-            _filled.values[_filled_mask],
-            linestyle="none",
-            marker=".",
-            markersize=2,
-            color="coral",
-            label="Pattern-filled",
+    # Before chart
+    _valid_before_df = _before_df[_before_df["is_gap"] == False].copy()
+
+    # Calculate dynamic y-axis range
+    _before_values = _valid_before_df["value"].dropna()
+    if len(_before_values) > 0:
+        _y_min = _before_values.min()
+        _y_max = _before_values.max()
+        _y_range = _y_max - _y_min
+        _y_extent = 0.2 * _y_range if _y_range > 0 else 1
+        _y_domain_min = _y_min - _y_extent
+        _y_domain_max = _y_max + _y_extent
+    else:
+        _y_domain_min = 0
+        _y_domain_max = 1
+
+    _before_chart = alt.Chart(_valid_before_df).mark_line(
+        color="steelblue",
+        strokeWidth=0.8
+    ).encode(
+        x=alt.X("time:T", title="Time"),
+        y=alt.Y("value:Q", title=series.name, scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]))
+    )
+
+    if _gap_rects:
+        _gap_df = pd.DataFrame(_gap_rects)
+        _gap_chart = alt.Chart(_gap_df).mark_rect(
+            color="red",
+            opacity=0.15
+        ).encode(
+            x=alt.X("start:T"),
+            x2=alt.X2("end:T")
         )
-    _ax.set_title("After (gaps filled)")
-    _ax.set_ylabel(_filled.name)
-    _ax.set_xlabel("Time")
-    _ax.legend(fontsize=8)
+        _before_chart = _before_chart + _gap_chart
 
-    plt.tight_layout()
-    _fig
+    _before_chart = _before_chart.properties(
+        title="Before (with gaps)",
+        height=150
+    ).configure_axis(
+        labelFontSize=10,
+        titleFontSize=11
+    )
+
+    # After chart: filled series with filled points highlighted
+    _after_df = pd.DataFrame({
+        "time": _filled.index,
+        "value": _filled.values
+    })
+
+    _filled_mask = series.isna() & _filled.notna()
+
+    # Calculate dynamic y-axis range based on both before and after data
+    _after_values = _after_df["value"].dropna()
+    if len(_before_values) > 0 and len(_after_values) > 0:
+        _y_min = min(_before_values.min(), _after_values.min())
+        _y_max = max(_before_values.max(), _after_values.max())
+        _y_range = _y_max - _y_min
+        _y_extent = 0.2 * _y_range if _y_range > 0 else 1
+        _y_domain_min = _y_min - _y_extent
+        _y_domain_max = _y_max + _y_extent
+    elif len(_after_values) > 0:
+        _y_min = _after_values.min()
+        _y_max = _after_values.max()
+        _y_range = _y_max - _y_min
+        _y_extent = 0.2 * _y_range if _y_range > 0 else 1
+        _y_domain_min = _y_min - _y_extent
+        _y_domain_max = _y_max + _y_extent
+    else:
+        _y_domain_min = 0
+        _y_domain_max = 1
+
+    _after_chart = alt.Chart(_after_df).mark_line(
+        color="steelblue",
+        strokeWidth=0.8
+    ).encode(
+        x=alt.X("time:T", title="Time"),
+        y=alt.Y("value:Q", title=_filled.name, scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]))
+    )
+
+    if _filled_mask.any():
+        _filled_pts_df = pd.DataFrame({
+            "time": _filled.index[_filled_mask],
+            "value": _filled.values[_filled_mask]
+        })
+        _filled_pts_chart = alt.Chart(_filled_pts_df).mark_point(
+            color="coral",
+            size=10
+        ).encode(
+            x=alt.X("time:T"),
+            y=alt.Y("value:Q")
+        )
+        _after_chart = _after_chart + _filled_pts_chart
+
+    _after_chart = _after_chart.properties(
+        title="After (gaps filled)",
+        height=150
+    ).configure_axis(
+        labelFontSize=10,
+        titleFontSize=11
+    ).configure_legend(
+        labelFontSize=8
+    )
+
+    _out = mo.vstack([
+        _before_chart,
+        _after_chart
+    ])
+
+    _out
     return
 
 
