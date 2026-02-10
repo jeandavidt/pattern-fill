@@ -16,7 +16,10 @@ async def _():
         # Install dependencies from PyPI
         print("📦 Installing dependencies from PyPI...")
         await micropip.install("wigglystuff>=0.2.21")
+        # Pin altair to 5.x - altair 6.0.0 requires typing-extensions>=4.12.0 which conflicts with Pyodide's 4.11.0
         await micropip.install("altair>=5.0.0,<6.0.0")
+        # Pin pydantic to <2.10 - pydantic 2.10+ requires typing-extensions>=4.12.2 which conflicts with Pyodide's 4.11.0
+        await micropip.install("pydantic>=2.0,<2.10")
         await micropip.install("pattern-fill")
         print("✅ All packages installed successfully!")
     return
