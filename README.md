@@ -2,7 +2,7 @@
 
 A metadata-aware implementation of pattern fill algorithms for gap-filling time series data using daily diurnal patterns.
 
-## 🎮 Try it Online
+## 🕹️ 📊 Try it Online
 
 **[Launch Interactive Pattern Designer →](https://jeandavidt.github.io/pattern-fill/)**
 
@@ -29,7 +29,7 @@ pip install pattern-fill
 
 ## Quick Start
 
-### Sine Wave Patterns (NEW)
+### Sine Wave Patterns
 
 Define patterns using intuitive sine wave parameters:
 
@@ -194,6 +194,16 @@ pytest tests/
 # Run specific test file
 pytest tests/test_sine_component.py -v
 ```
+
+## References
+
+- [Spline interpolation: Scipy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.make_interp_spline.html)
+- [FFT-based sine fitting: Scipy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.fft.fft.html)
+- [AR model fitting:L Statsmodel](https://www.statsmodels.org/stable/generated/statsmodels.tsa.ar_model.AutoReg.html)
+- [Stochastic gap filling: in *Influent generator: Towards realistic modelling of wastewater flowrate and water quality using machine-learning methods.*
+PhD Thesis. Département de génie civil et de génie des eaux, Université Laval, Québec, QC, Canada. 161pp.](https://4e9b4375-0b81-4185-8a04-40043079b54e.usrfiles.com/ugd/4e9b43_c3a48614df824166b319bf6f14da6319.pdf)
+- [Smooth daily pattern insertion in wastewater time series: in *Suivi, compréhension et modélisation d’une technologie à biofilm pour l’augmentation de la capacité des étangs aérés*
+PhD Thesis. Département de génie civil et de génie des eaux, Université Laval, Québec, Canada. 214pp.](https://4e9b4375-0b81-4185-8a04-40043079b54e.usrfiles.com/ugd/4e9b43_d3f4086026c843c58f8a7b1585d36155.pdf)
 
 ## License
 
