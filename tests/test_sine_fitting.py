@@ -85,3 +85,76 @@ class TestFitSinePattern:
         s = _make_sine_series()
         p = fit_sine_pattern(s, name="custom_pattern")
         assert p.name == "custom_pattern"
+
+
+class TestFitSinePattern:
+    def test_returns_daily_pattern(self):
+        s = _make_sine_series()
+        p = fit_sine_pattern(s)
+        assert isinstance(p, DailyPattern)
+        assert p.mode == "sine"
+
+    def test_fits_single_frequency(self):
+        s = _make_sine_series(amplitude=0.4, frequency=1.0, phase=8.0)
+        p = fit_sine_pattern(s, frequencies=[1.0])
+
+        assert len(p.sine_components) >= 1
+        freqs = [c.frequency for c in p.sine_components]
+        assert 1.0 in freqs
+
+    def test_auto_detect_frequencies(self):
+        s = _make_sine_series(amplitude=0.3, frequency=1.0, noise_level=0.02)
+        p = fit_sine_pattern(s, n_components=2)
+
+        assert len(p.sine_components) >= 1
+
+    def test_baseline_estimation(self):
+        s = _make_sine_series(baseline=0.6)
+        p = fit_sine_pattern(s)
+
+        assert 0.3 <= p.baseline <= 0.8
+
+    def test_handles_constant_data(self):
+        index = pd.date_range("2024-01-01", periods=96, freq="15min")
+        series = pd.Series(5.0, index=index, name="constant")
+
+        p = fit_sine_pattern(series)
+        assert isinstance(p, DailyPattern)
+        assert p.mode == "sine"
+
+    def test_respects_day_type(self):
+        s = _make_sine_series()
+        p = fit_sine_pattern(s, day_type="weekday")
+        assert p.day_type == "weekday"
+
+    def test_respects_name(self):
+        s = _make_sine_series()
+        p = fit_sine_pattern(s, name="custom_pattern")
+        assert p.name == "custom_pattern"
+
+
+class TestLeastSquaresFitting:
+    def test_least_squares_fitting_accuracy(self):
+        s = _make_sine_series(amplitude=0.4, frequency=1.0, phase=8.0, noise_level=0.02)
+        p = fit_sine_pattern(s, frequencies=[1.0])
+
+        assert len(p.sine_components) >= 1
+        comp = p.sine_components[0]
+        assert comp.frequency == 1.0
+        assert 0 <= comp.amplitude <= 1.0
+        assert 0 <= comp.phase < 24.0
+
+    def test_least_squares_with_multiple_frequencies(self):
+        s = _make_sine_series(amplitude=0.3, frequency=1.0, noise_level=0.02)
+        p = fit_sine_pattern(s, frequencies=[1.0, 2.0])
+
+        assert len(p.sine_components) >= 1
+        freqs = [c.frequency for c in p.sine_components]
+        assert 1.0 in freqs
+
+    def test_least_squares_with_auto_detect(self):
+        s = _make_sine_series(amplitude=0.3, frequency=1.0, noise_level=0.02)
+        p = fit_sine_pattern(s, n_components=2)
+
+        assert len(p.sine_components) >= 1
+        assert p.mode == "sine"
