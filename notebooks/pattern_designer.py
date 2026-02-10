@@ -15,7 +15,7 @@ async def _():
 
         # Install dependencies from PyPI
         print("📦 Installing dependencies from PyPI...")
-        await micropip.install("typing-extensions>=4.12.0")
+        await micropip.install("typing-extensions==4.11.0")
         await micropip.install("wigglystuff>=0.2.21")
         await micropip.install("pattern-fill")
         print("✅ All packages installed successfully!")
@@ -139,7 +139,9 @@ def _(mo):
 @app.cell
 def _(data_source, file_upload, meteaudata_upload, mo):
     mo.stop(data_source.value == "demo")
-    _upload_widget = file_upload if data_source.value == "upload_csv" else meteaudata_upload
+    _upload_widget = (
+        file_upload if data_source.value == "upload_csv" else meteaudata_upload
+    )
     _upload_widget
     return
 
@@ -291,15 +293,19 @@ def _(
                         # Workaround for metEAUdata parsing issue with multiple # in time series names
                         # Load CSV files manually and create a Signal object
                         data_dir = os.path.join(tmpdir, f"{signal_name}_data")
-                        csv_files = [f for f in os.listdir(data_dir) if f.endswith('.csv')]
+                        csv_files = [
+                            f for f in os.listdir(data_dir) if f.endswith(".csv")
+                        ]
 
                         df = pd.DataFrame()
                         for csv_file in csv_files:
                             csv_path = os.path.join(data_dir, csv_file)
-                            ts_data = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                            ts_data = pd.read_csv(
+                                csv_path, index_col=0, parse_dates=True
+                            )
                             # Use the CSV filename (without .csv) as the column name
                             # Keep original metEAUdata names - don't modify version numbers
-                            col_name = csv_file.replace('.csv', '')
+                            col_name = csv_file.replace(".csv", "")
                             loaded_series = ts_data.iloc[:, 0]
                             df[col_name] = loaded_series
 
@@ -370,11 +376,9 @@ def _(df, mo, pd, time_col, value_col):
 @app.cell
 def _(alt, pd, series):
     # Prepare data for Altair
-    _df = pd.DataFrame({
-        "time": series.index,
-        "value": series.values,
-        "is_gap": series.isna()
-    })
+    _df = pd.DataFrame(
+        {"time": series.index, "value": series.values, "is_gap": series.isna()}
+    )
 
     # Calculate gap regions for highlighting
     _nan_mask = series.isna()
@@ -393,33 +397,25 @@ def _(alt, pd, series):
     # Base chart with valid data
     _valid_df = _df[_df["is_gap"] == False].copy()
 
-    _chart = alt.Chart(_valid_df).mark_line(
-        color="steelblue",
-        strokeWidth=0.8
-    ).encode(
-        x=alt.X("time:T", title="Time"),
-        y=alt.Y("value:Q", title=series.name)
+    _chart = (
+        alt.Chart(_valid_df)
+        .mark_line(color="steelblue", strokeWidth=0.8)
+        .encode(x=alt.X("time:T", title="Time"), y=alt.Y("value:Q", title=series.name))
     )
 
     # Add gap regions as highlighted rectangles
     if _gap_rects:
         _gap_df = pd.DataFrame(_gap_rects)
-        _gap_chart = alt.Chart(_gap_df).mark_rect(
-            color="red",
-            opacity=0.2
-        ).encode(
-            x=alt.X("start:T"),
-            x2=alt.X2("end:T")
+        _gap_chart = (
+            alt.Chart(_gap_df)
+            .mark_rect(color="red", opacity=0.2)
+            .encode(x=alt.X("start:T"), x2=alt.X2("end:T"))
         )
         _chart = _chart + _gap_chart
 
     _chart = _chart.properties(
-        title="Raw series (red = gaps)",
-        height=100
-    ).configure_axis(
-        labelFontSize=10,
-        titleFontSize=11
-    )
+        title="Raw series (red = gaps)", height=100
+    ).configure_axis(labelFontSize=10, titleFontSize=11)
 
     _chart
     return
@@ -1499,14 +1495,37 @@ def _(
             _std_lower = _norm((_mean - 2 * _std).values)
             _std_upper = _norm((_mean + 2 * _std).values)
 
-            ax.fill_between(_hours, _std_lower, _std_upper, color="lightgray", alpha=0.6, label="±2 std dev")
-            ax.plot(_hours, _mean_norm, "-", color="gray", linewidth=2, alpha=0.7, label="Mean profile")
+            ax.fill_between(
+                _hours,
+                _std_lower,
+                _std_upper,
+                color="lightgray",
+                alpha=0.6,
+                label="±2 std dev",
+            )
+            ax.plot(
+                _hours,
+                _mean_norm,
+                "-",
+                color="gray",
+                linewidth=2,
+                alpha=0.7,
+                label="Mean profile",
+            )
 
         # Add individual components if multiple
         if pattern.mode == "sine" and len(pattern.sine_components) > 1:
             for i, comp in enumerate(pattern.sine_components):
                 _comp_vals = pattern.baseline + comp.evaluate(_h)
-                ax.plot(_h, np.clip(_comp_vals, 0, 1), "--", color="gray", linewidth=1.5, alpha=0.4, label=f"Wave {i+1}")
+                ax.plot(
+                    _h,
+                    np.clip(_comp_vals, 0, 1),
+                    "--",
+                    color="gray",
+                    linewidth=1.5,
+                    alpha=0.4,
+                    label=f"Wave {i + 1}",
+                )
 
         ax.set_xlabel("Hour of day")
         ax.set_ylabel("Normalized value (0–1)")
@@ -1514,7 +1533,9 @@ def _(
         ax.set_ylim(-0.1, 1.1)
         ax.legend(loc="upper right", fontsize=8)
         ax.grid(True, alpha=0.3)
-        ax.set_title(f"Sine Pattern ({n_components_slider.value} components){title_suffix}")
+        ax.set_title(
+            f"Sine Pattern ({n_components_slider.value} components){title_suffix}"
+        )
 
         return fig
 
@@ -1633,11 +1654,9 @@ def _(
 
     # Prepare data for Altair charts
     # Before chart: original series with gaps highlighted
-    _before_df = pd.DataFrame({
-        "time": series.index,
-        "value": series.values,
-        "is_gap": series.isna()
-    })
+    _before_df = pd.DataFrame(
+        {"time": series.index, "value": series.values, "is_gap": series.isna()}
+    )
 
     # Calculate gap regions
     _nan_mask = series.isna()
@@ -1669,38 +1688,34 @@ def _(
         _y_domain_min = 0
         _y_domain_max = 1
 
-    _before_chart = alt.Chart(_valid_before_df).mark_line(
-        color="steelblue",
-        strokeWidth=0.8
-    ).encode(
-        x=alt.X("time:T", title="Time"),
-        y=alt.Y("value:Q", title=series.name, scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]))
+    _before_chart = (
+        alt.Chart(_valid_before_df)
+        .mark_line(color="steelblue", strokeWidth=0.8)
+        .encode(
+            x=alt.X("time:T", title="Time"),
+            y=alt.Y(
+                "value:Q",
+                title=series.name,
+                scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]),
+            ),
+        )
     )
 
     if _gap_rects:
         _gap_df = pd.DataFrame(_gap_rects)
-        _gap_chart = alt.Chart(_gap_df).mark_rect(
-            color="red",
-            opacity=0.15
-        ).encode(
-            x=alt.X("start:T"),
-            x2=alt.X2("end:T")
+        _gap_chart = (
+            alt.Chart(_gap_df)
+            .mark_rect(color="red", opacity=0.15)
+            .encode(x=alt.X("start:T"), x2=alt.X2("end:T"))
         )
         _before_chart = _before_chart + _gap_chart
 
     _before_chart = _before_chart.properties(
-        title="Before (with gaps)",
-        height=150
-    ).configure_axis(
-        labelFontSize=10,
-        titleFontSize=11
-    )
+        title="Before (with gaps)", height=150
+    ).configure_axis(labelFontSize=10, titleFontSize=11)
 
     # After chart: filled series with filled points highlighted
-    _after_df = pd.DataFrame({
-        "time": _filled.index,
-        "value": _filled.values
-    })
+    _after_df = pd.DataFrame({"time": _filled.index, "value": _filled.values})
 
     _filled_mask = series.isna() & _filled.notna()
 
@@ -1724,42 +1739,37 @@ def _(
         _y_domain_min = 0
         _y_domain_max = 1
 
-    _after_chart = alt.Chart(_after_df).mark_line(
-        color="steelblue",
-        strokeWidth=0.8
-    ).encode(
-        x=alt.X("time:T", title="Time"),
-        y=alt.Y("value:Q", title=_filled.name, scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]))
+    _after_chart = (
+        alt.Chart(_after_df)
+        .mark_line(color="steelblue", strokeWidth=0.8)
+        .encode(
+            x=alt.X("time:T", title="Time"),
+            y=alt.Y(
+                "value:Q",
+                title=_filled.name,
+                scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]),
+            ),
+        )
     )
 
     if _filled_mask.any():
-        _filled_pts_df = pd.DataFrame({
-            "time": _filled.index[_filled_mask],
-            "value": _filled.values[_filled_mask]
-        })
-        _filled_pts_chart = alt.Chart(_filled_pts_df).mark_point(
-            color="coral",
-            size=10
-        ).encode(
-            x=alt.X("time:T"),
-            y=alt.Y("value:Q")
+        _filled_pts_df = pd.DataFrame(
+            {"time": _filled.index[_filled_mask], "value": _filled.values[_filled_mask]}
+        )
+        _filled_pts_chart = (
+            alt.Chart(_filled_pts_df)
+            .mark_point(color="coral", size=10)
+            .encode(x=alt.X("time:T"), y=alt.Y("value:Q"))
         )
         _after_chart = _after_chart + _filled_pts_chart
 
-    _after_chart = _after_chart.properties(
-        title="After (gaps filled)",
-        height=150
-    ).configure_axis(
-        labelFontSize=10,
-        titleFontSize=11
-    ).configure_legend(
-        labelFontSize=8
+    _after_chart = (
+        _after_chart.properties(title="After (gaps filled)", height=150)
+        .configure_axis(labelFontSize=10, titleFontSize=11)
+        .configure_legend(labelFontSize=8)
     )
 
-    _out = mo.vstack([
-        _before_chart,
-        _after_chart
-    ])
+    _out = mo.vstack([_before_chart, _after_chart])
 
     _out
     return
@@ -1877,9 +1887,9 @@ def _(
             # Clean the series name to avoid metEAUdata parsing issues with multiple #
             # metEAUdata expects names like "base#version", not "base#1#2"
             clean_series = df_all[series.name].copy()
-            if '#' in str(series.name):
+            if "#" in str(series.name):
                 # Extract just the base name before the first #
-                base_name = str(series.name).split('#')[0]
+                base_name = str(series.name).split("#")[0]
                 clean_series.name = base_name
             else:
                 clean_series.name = str(series.name)
