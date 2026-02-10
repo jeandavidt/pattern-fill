@@ -470,6 +470,22 @@ def _(mo, pattern_mode):
         show_value=True,
     )
 
+    # Add noise checkbox
+    add_noise_checkbox = mo.ui.checkbox(
+        label="Add noise (AR model)",
+        value=False,
+    )
+
+    # AR order slider
+    ar_order_slider = mo.ui.slider(
+        start=1,
+        stop=5,
+        step=1,
+        value=4,
+        label="AR order",
+        show_value=True,
+    )
+
     # Create count sliders based on mode
     n_points_slider = None
     n_components_slider = None
@@ -490,6 +506,8 @@ def _(mo, pattern_mode):
                 fit_checkbox,
                 normalize_checkbox,
                 blend_minutes_slider,
+                add_noise_checkbox,
+                ar_order_slider,
                 n_points_slider,
             ],
             justify="start",
@@ -512,6 +530,8 @@ def _(mo, pattern_mode):
                 fit_checkbox,
                 normalize_checkbox,
                 blend_minutes_slider,
+                add_noise_checkbox,
+                ar_order_slider,
                 n_components_slider,
             ],
             justify="start",
@@ -527,6 +547,8 @@ def _(mo, pattern_mode):
         n_components_slider,
         n_points_slider,
         normalize_checkbox,
+        add_noise_checkbox,
+        ar_order_slider,
     )
 
 
@@ -1628,7 +1650,9 @@ def _(get_committed_patterns, mo):
 @app.cell
 def _(
     active_patterns,
+    add_noise_checkbox,
     alt,
+    ar_order_slider,
     blend_minutes_slider,
     mo,
     normalize_checkbox,
@@ -1650,8 +1674,10 @@ def _(
         [series],
         pattern=_pat_arg,
         scaling="local",
-        normalize=normalize_checkbox.value,
+        normalize_area=normalize_checkbox.value,
         blend_minutes=blend_minutes_slider.value,
+        add_noise=add_noise_checkbox.value,
+        ar_order=ar_order_slider.value,
     )
     _filled, _steps = _results[0]
 
@@ -1782,6 +1808,8 @@ def _(
 def _(
     Signal,
     active_patterns,
+    add_noise_checkbox,
+    ar_order_slider,
     base64,
     blend_minutes_slider,
     df,
@@ -1811,6 +1839,8 @@ def _(
         pattern_arg,
         normalize,
         blend_minutes,
+        add_noise,
+        ar_order,
         import_type,
         original_signal,
         original_dataset,
@@ -1833,8 +1863,10 @@ def _(
                 pattern_fill,
                 pattern=pattern_arg,
                 scaling="local",
-                normalize=normalize,
+                normalize_area=normalize,
                 blend_minutes=blend_minutes,
+                add_noise=add_noise,
+                ar_order=ar_order,
             )
 
             # Update the dataset with the processed signal
@@ -1910,8 +1942,10 @@ def _(
             pattern_fill,
             pattern=pattern_arg,
             scaling="local",
-            normalize=normalize,
+            normalize_area=normalize,
             blend_minutes=blend_minutes,
+            add_noise=add_noise,
+            ar_order=ar_order,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1952,6 +1986,8 @@ def _(
         _pat_arg,
         normalize_checkbox.value,
         blend_minutes_slider.value,
+        add_noise_checkbox.value,
+        ar_order_slider.value,
         import_type,
         original_signal,
         original_dataset,

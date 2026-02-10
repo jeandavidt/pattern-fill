@@ -16,6 +16,7 @@ from meteaudata.types import (
 
 from pattern_fill.fitting import extract_daily_profile
 from pattern_fill.pattern import DailyPattern
+from pattern_fill.stochastic import add_ar_noise
 
 
 def _find_nan_runs(mask: np.ndarray) -> list[tuple[int, int]]:
@@ -259,6 +260,9 @@ def pattern_fill(
     window: str = "24h",
     blend_minutes: int = 60,
     normalize_area: bool = False,
+    add_noise: bool = False,
+    ar_order: int = 4,
+    random_seed: int | None = None,
     *args: Any,
     **kwargs: Any,
 ) -> list[tuple[pd.Series, list[ProcessingStep]]]:
@@ -274,6 +278,16 @@ def pattern_fill(
     normalize_area : bool
         When True, the fill's area is normalized to match the expected daily
         profile computed from the clean portions of the series.
+    add_noise : bool
+        When True, adds AR(p) noise to the filled values to better represent
+        variability. The noise is fitted to residuals between the pattern and
+        clean data near each gap.
+    ar_order : int
+        Autoregressive order for noise generation (1-5). Only used when
+        add_noise=True.
+    random_seed : int, optional
+        Random seed for reproducible noise generation. Only used when
+        add_noise=True.
     """
     if isinstance(pattern, DailyPattern):
         pattern_meta = pattern.to_dict()
@@ -292,6 +306,8 @@ def pattern_fill(
         window=window,
         blend_minutes=blend_minutes,
         normalize_area=normalize_area,
+        add_noise=add_noise,
+        ar_order=ar_order,
     )
     processing_step = ProcessingStep(
         type=ProcessingType.GAP_FILLING,
@@ -320,6 +336,46 @@ def pattern_fill(
 
         freq_min = _infer_freq_minutes(col.index)
         blend_n = max(1, int(round(blend_minutes / freq_min)))
+
+        # Pre-compute global residuals for AR noise (if enabled)
+        global_ar_coeffs = None
+        global_noise_std = None
+        if add_noise:
+            # Get all clean data
+            clean_mask = ~col.isna()
+            clean_idx = np.where(clean_mask)[0]
+            
+            if len(clean_idx) >= ar_order + 1:
+                # Compute pattern prediction on all clean data
+                clean_times = col.index[clean_idx]
+                frac_hours = (
+                    clean_times.hour
+                    + clean_times.minute / 60.0
+                    + clean_times.second / 3600.0
+                )
+                
+                # Compute pattern predictions for all clean data
+                pat_pred = np.empty(len(clean_idx))
+                for i, ts in enumerate(clean_times):
+                    pat = _select_pattern(pattern, ts)
+                    pat_pred[i] = pat.evaluate(np.array([frac_hours.values[i]]))[0]
+                
+                # Scale pattern predictions to data range (use global range)
+                data_min_global = float(col[clean_mask].min())
+                data_max_global = float(col[clean_mask].max())
+                dr_global = data_max_global - data_min_global
+                if abs(dr_global) < 1e-12:
+                    dr_global = 1.0
+                pat_pred_scaled = pat_pred * dr_global + data_min_global
+                
+                # Compute global residuals
+                clean_values = col.iloc[clean_idx].values
+                global_residuals = clean_values - pat_pred_scaled
+                
+                # Fit AR model to global residuals
+                from pattern_fill.stochastic import fit_ar_model
+                global_ar_coeffs = fit_ar_model(global_residuals, ar_order)
+                global_noise_std = np.std(global_residuals)
 
         nan_mask = col.isna().values
         runs = _find_nan_runs(nan_mask)
@@ -350,6 +406,23 @@ def pattern_fill(
                 actual = p_scaled.sum()
                 if expected is not None and abs(actual) > 1e-12:
                     p_scaled *= expected / actual
+
+            # Add AR noise (after area normalization, before anchors)
+            if add_noise and global_ar_coeffs is not None:
+                noise = add_ar_noise(
+                    p_scaled=p_scaled,
+                    col=col,
+                    gap_start=start,
+                    gap_stop=stop,
+                    pattern=pat,
+                    scaling_params=(data_min, data_max),
+                    ar_order=ar_order,
+                    blend_n=blend_n,
+                    seed=random_seed,
+                    ar_coefficients=global_ar_coeffs,
+                    noise_std=global_noise_std,
+                )
+                p_scaled = p_scaled + noise
 
             # Smoothed boundary anchors
             left_anchor = (

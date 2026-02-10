@@ -62,40 +62,33 @@ def fit_sine_pattern(
     >>> # Fit daily + twice-daily pattern for wastewater
     >>> pattern = fit_sine_pattern(series, frequencies=[1.0, 2.0])
     """
-    # Extract daily profile
     profile = extract_daily_profile(
         series,
         resolution_minutes=resolution_minutes,
         aggregation=aggregation,
     )
 
-    # Estimate baseline from profile mean if not provided
     if baseline is None:
         baseline = float(np.clip(profile.mean(), 0.0, 1.0))
 
-    # Get x (hours) and y (normalized values)
     hours = profile.index.values
     values = profile.values
 
-    # Normalize values to roughly [0, 1] range
-    v_min, v_max = values.min(), values.max()
+    v_min, v_max = float(np.min(values)), float(np.max(values))
     if v_max - v_min > 0:
         values_norm = (values - v_min) / (v_max - v_min)
     else:
         values_norm = np.full_like(values, 0.5)
 
-    # Determine frequencies to fit
     if frequencies is None:
         frequencies = _detect_frequencies_fft(hours, values_norm, n_components)
 
-    # Fit amplitude and phase for each frequency
     components = []
     for freq in frequencies:
         amplitude, phase = _fit_single_sine(hours, values_norm, freq, baseline)
-        if amplitude > 0.01:  # Only include significant components
+        if amplitude > 0.01:
             components.append(SineComponent(amplitude, freq, phase))
 
-    # If no significant components found, create a simple flat pattern
     if not components:
         components = [SineComponent(0.1, 1.0, 0.0)]
 
@@ -116,24 +109,18 @@ def _detect_frequencies_fft(
 
     Returns the top n_components frequencies in cycles per day.
     """
-    # Perform FFT
     fft_values = rfft(values - values.mean())
     fft_freqs = rfftfreq(len(values), d=hours[1] - hours[0])
 
-    # Convert frequencies from cycles/hour to cycles/day
     fft_freqs_per_day = fft_freqs * 24.0
 
-    # Get magnitudes and find peaks
     magnitudes = np.abs(fft_values)
 
-    # Exclude DC component (index 0) and find top peaks
     peak_indices = np.argsort(magnitudes[1:])[::-1][:n_components] + 1
     detected_freqs = fft_freqs_per_day[peak_indices]
 
-    # Round to common fractions (0.5, 1.0, 1.5, 2.0, etc.)
     rounded_freqs = [round(f * 2) / 2 for f in detected_freqs]
 
-    # Filter out zero or negative frequencies
     valid_freqs = [f for f in rounded_freqs if f > 0]
 
     return valid_freqs if valid_freqs else [1.0]
@@ -155,20 +142,18 @@ def _fit_single_sine(
     amplitude : float
     phase : float (in hours)
     """
+
     def residual(params):
         amp, phase = params
-        # Use cosine for peak at phase hour
         predicted = baseline + amp * np.cos(
             2 * np.pi * frequency * (hours - phase) / 24.0
         )
         predicted = np.clip(predicted, 0.0, 1.0)
         return predicted - values
 
-    # Initial guess: amplitude from std, phase from peak
     initial_amp = np.std(values - baseline)
     initial_phase = hours[np.argmax(values)]
 
-    # Optimize
     result = least_squares(
         residual,
         x0=[initial_amp, initial_phase],

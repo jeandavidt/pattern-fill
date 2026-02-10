@@ -10,6 +10,7 @@ from pattern_fill.gap_fill import (
     _blend_fill,
 )
 from pattern_fill.pattern import DailyPattern
+from pattern_fill import fit_ar_model, generate_ar_noise, add_ar_noise
 
 
 def _sine_pattern() -> DailyPattern:
@@ -549,3 +550,208 @@ class TestPatternFillWithSineMode:
             filled.loc[non_nan_mask].values,
             s.loc[non_nan_mask].values,
         )
+
+
+# ============================================================================
+# AR Noise Injection Tests
+# ============================================================================
+
+
+class TestPatternFillWithNoise:
+    """Tests for AR noise injection in pattern_fill."""
+
+    def _make_series_with_variability(self):
+        """Create test series with gap and more variability."""
+        idx = pd.date_range("2024-01-01", periods=7 * 96, freq="15min")
+        hours = idx.hour + idx.minute / 60.0
+        rng = np.random.default_rng(42)
+        values = 10.0 + 5.0 * np.sin(2 * np.pi * hours / 24) + 0.5 * rng.standard_normal(len(hours))
+        s = pd.Series(values, index=idx, name="sensor_raw")
+        s.iloc[200:248] = np.nan  # 12-hour gap
+        return s
+
+    def test_add_noise_false_no_noise(self):
+        """When add_noise=False, no noise is added."""
+        s = _make_series_with_gap()
+        result1 = pattern_fill([s], pattern=_sine_pattern(), add_noise=False)
+        result2 = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=False, random_seed=42
+        )
+
+        filled1, _ = result1[0]
+        filled2, _ = result2[0]
+
+        # Should be identical
+        np.testing.assert_allclose(filled1.values, filled2.values)
+
+    def test_add_noise_true_adds_variability(self):
+        """When add_noise=True, noise is added."""
+        s = self._make_series_with_variability()
+        result1 = pattern_fill([s], pattern=_sine_pattern(), add_noise=False)
+        result2 = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+
+        filled1, _ = result1[0]
+        filled2, _ = result2[0]
+
+        # Filled regions should differ
+        gap_mask = s.isna()
+        assert not np.allclose(
+            filled1.loc[gap_mask].values, filled2.loc[gap_mask].values
+        )
+
+    def test_noise_reproducible_with_seed(self):
+        """Same seed produces same noise."""
+        s = _make_series_with_gap()
+        result1 = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+        result2 = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+
+        filled1, _ = result1[0]
+        filled2, _ = result2[0]
+
+        np.testing.assert_allclose(filled1.values, filled2.values)
+
+    def test_noise_preserves_boundary_continuity(self):
+        """Noise injection preserves boundary continuity."""
+        s = _make_series_with_gap()
+        nan_mask = s.isna()
+        first_nan = nan_mask.idxmax()
+        last_valid_before = s.loc[:first_nan].dropna().index[-1]
+
+        result = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+
+        val_before = s.loc[last_valid_before]
+        filled_at_start = filled.loc[
+            s.index[s.index.get_loc(last_valid_before) + 1]
+        ]
+        assert abs(val_before - filled_at_start) < 1.0
+
+    def test_noise_no_negative_values(self):
+        """Noise injection doesn't produce negative values."""
+        s = _make_series_with_gap()
+        result = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+
+        assert filled.min() >= 0
+
+    def test_noise_no_overshoot(self):
+        """Noise injection doesn't cause excessive overshoot."""
+        s = _make_series_with_gap()
+        holey_max = s.max()
+
+        result = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+
+        assert filled.max() <= holey_max * 1.1
+
+    def test_ar_order_affects_noise(self):
+        """Different AR orders produce different noise."""
+        s = self._make_series_with_variability()
+        result1 = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, ar_order=1, random_seed=42
+        )
+        result2 = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, ar_order=4, random_seed=42
+        )
+
+        filled1, _ = result1[0]
+        filled2, _ = result2[0]
+
+        gap_mask = s.isna()
+        assert not np.allclose(
+            filled1.loc[gap_mask].values, filled2.loc[gap_mask].values
+        )
+
+    def test_noise_with_area_normalization(self):
+        """Noise works correctly with area normalization."""
+        s = _make_series_with_gap(days=14, gap_start_day=3, gap_hours=12)
+        result = pattern_fill(
+            [s],
+            pattern=_sine_pattern(),
+            normalize_area=True,
+            add_noise=True,
+            random_seed=42,
+        )
+        filled, _ = result[0]
+
+        # Should fill all gaps
+        assert filled.isna().sum() == 0
+
+    def test_noise_with_dict_pattern(self):
+        """Noise works with weekday/weekend patterns."""
+        s = _make_series_with_gap(days=14, gap_start_day=5, gap_hours=48)
+        patterns = {
+            "weekday": DailyPattern(
+                hours=list(range(24)),
+                values=[
+                    0.5 + 0.5 * np.sin(2 * np.pi * h / 24) for h in range(24)
+                ],
+                name="wd",
+                day_type="weekday",
+            ),
+            "weekend": DailyPattern(
+                hours=list(range(24)),
+                values=[
+                    0.3 + 0.3 * np.sin(2 * np.pi * h / 24) for h in range(24)
+                ],
+                name="we",
+                day_type="weekend",
+            ),
+        }
+        result = pattern_fill(
+            [s], pattern=patterns, add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+        assert not filled.isna().any()
+
+    def test_noise_with_sine_pattern(self):
+        """Noise works with sine-mode patterns."""
+        s = _make_series_with_gap()
+        pattern = DailyPattern.from_simple_sine(
+            amplitude=0.4, frequency=1.0, phase=6.0, baseline=0.5
+        )
+        result = pattern_fill(
+            [s], pattern=pattern, add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+        assert not filled.isna().any()
+
+    def test_noise_multiple_gaps(self):
+        """Noise works correctly with multiple gaps."""
+        s = _make_series_with_gap()
+        # Add another gap
+        s.iloc[500:524] = np.nan
+
+        result = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+        assert not filled.isna().any()
+
+    def test_noise_preserves_non_nan_values(self):
+        """Noise injection preserves existing non-NaN values."""
+        s = _make_series_with_gap()
+        non_nan_mask = s.notna()
+
+        result = pattern_fill(
+            [s], pattern=_sine_pattern(), add_noise=True, random_seed=42
+        )
+        filled, _ = result[0]
+
+        np.testing.assert_allclose(
+            filled.loc[non_nan_mask].values,
+            s.loc[non_nan_mask].values,
+        )
+
