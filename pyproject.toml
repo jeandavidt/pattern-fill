@@ -12,6 +12,7 @@ dependencies = [
     "anthropic>=0.78.0",
     "pydantic-ai-slim>=1.56.0",
     "marimo>=0.19.9",
+    "altair>=6.0.0",
 ]
 
 [project.optional-dependencies]
