@@ -18,8 +18,8 @@ async def _():
         await micropip.install("wigglystuff>=0.2.21")
         # Pin altair to 5.x - altair 6.0.0 requires typing-extensions>=4.12.0 which conflicts with Pyodide's 4.11.0
         await micropip.install("altair>=5.0.0,<6.0.0")
-        # Pin pydantic to <2.10 - pydantic 2.10+ requires typing-extensions>=4.12.2 which conflicts with Pyodide's 4.11.0
-        await micropip.install("pydantic>=2.0,<2.10")
+        # Note: pydantic is included in Pyodide as a built-in package (v2.12.5)
+        # Don't install it via micropip - it will use the built-in version
         await micropip.install("pattern-fill")
         print("✅ All packages installed successfully!")
     return
