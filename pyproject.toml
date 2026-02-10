@@ -12,7 +12,9 @@ dependencies = [
     "anthropic>=0.78.0",
     "pydantic-ai-slim>=1.56.0",
     "marimo>=0.19.9",
-    "altair>=6.0.0",
+    "altair>=5.0.0,<6.0.0",
+    "wigglystuff>=0.2.23",
+    "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]
