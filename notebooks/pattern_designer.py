@@ -1,3 +1,15 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "altair==6.0.0",
+#     "matplotlib==3.10.8",
+#     "meteaudata==0.11.0",
+#     "numpy==2.2.6",
+#     "pandas==2.3.3",
+#     "pattern-fill==0.1.3",
+#     "wigglystuff==0.2.24",
+# ]
+# ///
 import marimo
 
 __generated_with = "0.19.9"
@@ -470,11 +482,12 @@ def _(mo, pattern_mode):
         show_value=True,
     )
 
-    # Add noise checkbox
+     # Add noise checkbox
     add_noise_checkbox = mo.ui.checkbox(
         label="Add noise (AR model)",
         value=False,
     )
+
 
     # AR order slider
     ar_order_slider = mo.ui.slider(
@@ -485,6 +498,7 @@ def _(mo, pattern_mode):
         label="AR order",
         show_value=True,
     )
+
 
     # Create count sliders based on mode
     n_points_slider = None
