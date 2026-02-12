@@ -32,7 +32,7 @@ async def _():
         await micropip.install("altair>=5.0.0,<6.0.0")
         # Note: pydantic is included in Pyodide as a built-in package (v2.12.5)
         # Don't install it via micropip - it will use the built-in version
-        await micropip.install("pattern-fill")
+        await micropip.install("pattern-fill==0.1.3")
         print("✅ All packages installed successfully!")
     return
 
