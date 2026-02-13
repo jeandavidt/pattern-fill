@@ -16,10 +16,9 @@ from meteaudata.types import (
 
 from pattern_fill.fitting import extract_daily_profile
 from pattern_fill.pattern import DailyPattern
-from pattern_fill.stochastic import add_ar_noise
 
 
-def _find_nan_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+def find_nan_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     """Return (start, stop) index pairs for contiguous True runs in *mask*."""
     if not mask.any():
         return []
@@ -33,7 +32,7 @@ def _find_nan_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return list(zip(starts.tolist(), ends.tolist()))
 
 
-def _classify_runs(
+def classify_runs(
     runs: list[tuple[int, int]], series_len: int
 ) -> list[tuple[int, int]]:
     """Return only interior NaN runs, excluding leading and trailing."""
@@ -44,7 +43,7 @@ def _classify_runs(
     ]
 
 
-def _select_pattern(
+def select_pattern(
     pattern: DailyPattern | dict[str, DailyPattern],
     timestamp: pd.Timestamp,
 ) -> DailyPattern:
@@ -63,7 +62,7 @@ def _select_pattern(
     )
 
 
-def _infer_freq_minutes(index: pd.DatetimeIndex) -> float:
+def infer_freq_minutes(index: pd.DatetimeIndex) -> float:
     """Infer the sampling frequency in minutes from a DatetimeIndex."""
     freq = pd.infer_freq(index)
     if freq is not None:
@@ -77,7 +76,7 @@ def _infer_freq_minutes(index: pd.DatetimeIndex) -> float:
     return diffs.median().total_seconds() / 60
 
 
-def _smoothed_anchor(
+def smoothed_anchor(
     col: pd.Series,
     gap_edge_idx: int,
     side: str,
@@ -109,49 +108,31 @@ def _smoothed_anchor(
     return float(np.average(valid.values, weights=weights))
 
 
-def _estimate_data_range(
-    col: pd.Series,
-    gap_start: int,
-    gap_stop: int,
-    window: str,
-    scaling: str,
-) -> tuple[float, float]:
-    """Estimate (data_min, data_max) for pattern scaling."""
-    if scaling == "none":
-        return 0.0, 1.0
+def collect_window_idx(
+    clean_mask: np.ndarray,
+    col_index: pd.DatetimeIndex,
+    before_time: pd.Timestamp,
+    window_days: float | None,
+    min_count: int = 2,
+) -> np.ndarray:
+    """Indices of clean samples in the backward window before before_time.
 
-    if scaling == "global":
-        clean = col.dropna()
-        if len(clean) < 2:
-            return 0.0, 1.0
-        return float(clean.min()), float(clean.max())
-
-    if scaling != "local":
-        raise ValueError(
-            f"scaling must be 'local', 'global', or 'none', got {scaling!r}"
-        )
-
-    # Local: data within time window on each side of the gap
-    gap_left_ts = col.index[gap_start]
-    gap_right_ts = col.index[gap_stop - 1]
-    td = pd.Timedelta(window)
-
-    left_data = col.loc[: col.index[gap_start - 1]].dropna() if gap_start > 0 else pd.Series(dtype=float)
-    if len(left_data) > 0:
-        left_data = left_data.loc[left_data.index >= (gap_left_ts - td)]
-
-    right_data = col.loc[col.index[gap_stop] :].dropna() if gap_stop < len(col) else pd.Series(dtype=float)
-    if len(right_data) > 0:
-        right_data = right_data.loc[right_data.index <= (gap_right_ts + td)]
-
-    nearby = pd.concat([left_data, right_data])
-    if len(nearby) < 2:
-        clean = col.dropna()
-        if len(clean) < 2:
-            return 0.0, 1.0
-        return float(clean.min()), float(clean.max())
-
-    return float(nearby.min()), float(nearby.max())
+    If window_days is None, returns ALL clean samples before before_time.
+    If window_days is set, starts with [before_time - window_days, before_time);
+    expands further back if fewer than min_count clean samples are found.
+    """
+    if window_days is not None:
+        window_start = before_time - pd.Timedelta(days=window_days)
+        idx = np.where(
+            (col_index >= window_start)
+            & (col_index < before_time)
+            & clean_mask
+        )[0]
+        if len(idx) < min_count:
+            idx = np.where((col_index < before_time) & clean_mask)[0]
+    else:
+        idx = np.where(clean_mask)[0]
+    return idx
 
 
 def _blend_fill(
@@ -256,12 +237,12 @@ def _compute_expected_area(
 def pattern_fill(
     input_series: list[pd.Series],
     pattern: DailyPattern | dict[str, DailyPattern],
-    scaling: str = "local",
-    window: str = "24h",
+    pattern_window_days: float | None = None,
     blend_minutes: int = 60,
     normalize_area: bool = False,
     add_noise: bool = False,
     ar_order: int = 4,
+    ar_window_days: float | None = None,
     random_seed: int | None = None,
     *args: Any,
     **kwargs: Any,
@@ -272,21 +253,31 @@ def pattern_fill(
 
     Parameters
     ----------
+    pattern_window_days : float, optional
+        When set, pattern scaling uses only clean data from this many days
+        before each gap start.  If fewer than 2 clean samples exist in the
+        window, all available prior clean data is used.  When None, all clean
+        data in the series is used for scaling (global default).
     blend_minutes : int
         Width (in minutes) of the smoothing window used for anchor
-        computation **and** the cosine blend zone inside each gap.
+        computation and the cosine blend zone inside each gap.
     normalize_area : bool
         When True, the fill's area is normalized to match the expected daily
         profile computed from the clean portions of the series.
     add_noise : bool
         When True, adds AR(p) noise to the filled values to better represent
-        variability. The noise is fitted to residuals between the pattern and
-        clean data near each gap.
+        variability.  The noise is fitted to residuals between the pattern
+        and clean data near each gap.
     ar_order : int
-        Autoregressive order for noise generation (1-5). Only used when
+        Autoregressive order for noise generation (1-5).  Only used when
         add_noise=True.
+    ar_window_days : float, optional
+        When set, the AR model is fitted on a rolling window of available
+        (non-NaN) clean data of up to this many days immediately before each
+        gap.  If fewer clean samples exist than needed, all available prior
+        clean data is used.  Only used when add_noise=True.
     random_seed : int, optional
-        Random seed for reproducible noise generation. Only used when
+        Random seed for reproducible noise generation.  Only used when
         add_noise=True.
     """
     if isinstance(pattern, DailyPattern):
@@ -302,12 +293,12 @@ def pattern_fill(
     )
     parameters = Parameters(
         pattern=pattern_meta,
-        scaling=scaling,
-        window=window,
+        pattern_window_days=pattern_window_days,
         blend_minutes=blend_minutes,
         normalize_area=normalize_area,
         add_noise=add_noise,
         ar_order=ar_order,
+        ar_window_days=ar_window_days,
     )
     processing_step = ProcessingStep(
         type=ProcessingType.GAP_FILLING,
@@ -334,110 +325,137 @@ def pattern_fill(
                 f"got {type(col.index)}"
             )
 
-        freq_min = _infer_freq_minutes(col.index)
+        freq_min = infer_freq_minutes(col.index)
         blend_n = max(1, int(round(blend_minutes / freq_min)))
 
-        # Pre-compute global residuals for AR noise (if enabled)
-        global_ar_coeffs = None
-        global_noise_std = None
-        if add_noise:
-            # Get all clean data
-            clean_mask = ~col.isna()
-            clean_idx = np.where(clean_mask)[0]
-            
-            if len(clean_idx) >= ar_order + 1:
-                # Compute pattern prediction on all clean data
-                clean_times = col.index[clean_idx]
-                frac_hours = (
-                    clean_times.hour
-                    + clean_times.minute / 60.0
-                    + clean_times.second / 3600.0
-                )
-                
-                # Compute pattern predictions for all clean data
-                pat_pred = np.empty(len(clean_idx))
-                for i, ts in enumerate(clean_times):
-                    pat = _select_pattern(pattern, ts)
-                    pat_pred[i] = pat.evaluate(np.array([frac_hours.values[i]]))[0]
-                
-                # Scale pattern predictions to data range (use global range)
-                data_min_global = float(col[clean_mask].min())
-                data_max_global = float(col[clean_mask].max())
-                dr_global = data_max_global - data_min_global
-                if abs(dr_global) < 1e-12:
-                    dr_global = 1.0
-                pat_pred_scaled = pat_pred * dr_global + data_min_global
-                
-                # Compute global residuals
-                clean_values = col.iloc[clean_idx].values
-                global_residuals = clean_values - pat_pred_scaled
-                
-                # Fit AR model to global residuals
-                from pattern_fill.stochastic import fit_ar_model
-                global_ar_coeffs = fit_ar_model(global_residuals, ar_order)
-                global_noise_std = np.std(global_residuals)
+        # Original clean mask (before any filling)
+        original_clean_mask = ~col.isna().values
+        original_col = col.copy()  # keep original for AR residuals
 
         nan_mask = col.isna().values
-        runs = _find_nan_runs(nan_mask)
-        interior_runs = _classify_runs(runs, len(col))
+        runs = find_nan_runs(nan_mask)
+        interior_runs = classify_runs(runs, len(col))
 
+        # Store scaling params for each gap (needed for AR noise in Pass 2)
+        gap_scaling_params: dict[tuple[int, int], tuple[float, float, float]] = {}
+
+        # Pass 1: pattern fill
         for start, stop in interior_runs:
             gap_idx = col.index[start:stop]
+            gap_start_time = col.index[start]
 
-            # Evaluate pattern over the gap
-            pat_vals = np.empty(len(gap_idx))
-            for i, ts in enumerate(gap_idx):
-                pat = _select_pattern(pattern, ts)
-                frac_h = ts.hour + ts.minute / 60.0 + ts.second / 3600.0
-                pat_vals[i] = pat.evaluate(np.array([frac_h]))[0]
-
-            # Scale pattern to data range
-            data_min, data_max = _estimate_data_range(
-                col, start, stop, window, scaling
+            # 1. Collect backward window of clean data
+            win_idx = collect_window_idx(
+                original_clean_mask, col.index, gap_start_time,
+                pattern_window_days, min_count=2
             )
-            dr = data_max - data_min
-            if abs(dr) < 1e-12:
-                dr = 1.0
+            win_values = (
+                col.iloc[win_idx].values if len(win_idx) >= 2
+                else col[original_clean_mask].values
+            )
+            if len(win_values) < 2:
+                data_min, data_max = 0.0, 1.0
+            else:
+                data_min = float(win_values.min())
+                data_max = float(win_values.max())
+            dr = data_max - data_min if abs(data_max - data_min) > 1e-12 else 1.0
+
+            # 2. Evaluate pattern over gap
+            pat_vals = np.array([
+                select_pattern(pattern, ts).evaluate(
+                    np.array([ts.hour + ts.minute / 60.0 + ts.second / 3600.0])
+                )[0]
+                for ts in gap_idx
+            ])
             p_scaled = pat_vals * dr + data_min
 
-            # Area normalization (opt-in)
+            # Store scaling params for AR noise (Pass 2)
+            gap_scaling_params[(start, stop)] = (data_min, data_max, dr)
+
+            # 3. Optional area normalization
             if normalize_area:
                 expected = _compute_expected_area(col, gap_idx, pattern)
                 actual = p_scaled.sum()
                 if expected is not None and abs(actual) > 1e-12:
                     p_scaled *= expected / actual
 
-            # Add AR noise (after area normalization, before anchors)
-            if add_noise and global_ar_coeffs is not None:
-                noise = add_ar_noise(
-                    p_scaled=p_scaled,
-                    col=col,
-                    gap_start=start,
-                    gap_stop=stop,
-                    pattern=pat,
-                    scaling_params=(data_min, data_max),
-                    ar_order=ar_order,
-                    blend_n=blend_n,
-                    seed=random_seed,
-                    ar_coefficients=global_ar_coeffs,
-                    noise_std=global_noise_std,
-                )
-                p_scaled = p_scaled + noise
-
-            # Smoothed boundary anchors
+            # 4. Cosine blend at boundaries
             left_anchor = (
-                _smoothed_anchor(col, start - 1, "left", blend_n)
+                smoothed_anchor(col, start - 1, "left", blend_n)
                 if start > 0
                 else None
             )
             right_anchor = (
-                _smoothed_anchor(col, stop, "right", blend_n)
+                smoothed_anchor(col, stop, "right", blend_n)
                 if stop < len(col)
                 else None
             )
-
             filled = _blend_fill(p_scaled, left_anchor, right_anchor, blend_n)
             col.iloc[start:stop] = filled
+
+        # Pass 2: AR noise
+        if add_noise:
+            from pattern_fill.stochastic import fit_ar_model, generate_ar_noise
+
+            for start, stop in interior_runs:
+                gap_start_time = col.index[start]
+
+                # Get the scaling params used for this gap in Pass 1
+                # These are needed to scale the noise to match the fill
+                scaling_params = gap_scaling_params.get((start, stop))
+                if scaling_params is None:
+                    continue  # shouldn't happen, but be safe
+                fill_min, fill_max, fill_dr = scaling_params
+
+                # 1. Collect backward window of clean residuals
+                win_idx = collect_window_idx(
+                    original_clean_mask, col.index, gap_start_time,
+                    ar_window_days, min_count=ar_order + 1
+                )
+
+                if len(win_idx) < ar_order + 1:
+                    continue  # not enough data — skip noise for this gap
+
+                # 2. Compute residuals = actual - pattern_prediction
+                # Use LOCAL scaling from the AR window to capture true local noise
+                win_times = col.index[win_idx]
+                win_data = original_col.iloc[win_idx].values
+                win_hours = (
+                    win_times.hour + win_times.minute / 60.0 + win_times.second / 3600.0
+                ).values
+                
+                # Compute local scaling for the AR window
+                local_min = float(win_data.min())
+                local_max = float(win_data.max())
+                local_dr = local_max - local_min if abs(local_max - local_min) > 1e-12 else 1.0
+                
+                # Compute pattern prediction with LOCAL scaling
+                win_pred_local = np.array([
+                    select_pattern(pattern, ts).evaluate(np.array([h]))[0]
+                    for ts, h in zip(win_times, win_hours)
+                ]) * local_dr + local_min
+                
+                # Residuals in local scale
+                win_residuals = win_data - win_pred_local
+                
+                # 3. Fit AR model to local residuals
+                ar_coeffs = fit_ar_model(win_residuals, ar_order)
+                local_noise_std = float(np.std(win_residuals))
+                
+                # Scale noise std from local to fill scale
+                # This ensures noise magnitude matches the filled values
+                noise_std = local_noise_std * (fill_dr / local_dr)
+                
+                gap_noise = generate_ar_noise(
+                    stop - start, ar_coeffs, noise_std, random_seed
+                )
+
+                # 4. Apply sine taper (zero at boundaries)
+                n = stop - start
+                positions = np.arange(n, dtype=float)
+                edge_dist = np.minimum(positions, float(n - 1) - positions)
+                taper = np.sin(np.pi * np.clip(edge_dist / max(blend_n, 1), 0, 1) / 2)
+                col.iloc[start:stop] += gap_noise * taper
 
         col.name = f"{signal_name}_{processing_step.suffix}"
         outputs.append((col, [processing_step]))
@@ -451,8 +469,7 @@ def pattern_fill_dataset(
     patterns: list[DailyPattern | dict[str, DailyPattern]],
     mode: str = "load",
     blend_minutes: int = 60,
-    scaling: str = "local",
-    window: str = "24h",
+    pattern_window_days: float | None = None,
     *args: Any,
     **kwargs: Any,
 ) -> list[Signal]:
@@ -467,6 +484,9 @@ def pattern_fill_dataset(
         its own daily profile.  ``"load"`` — two signals (concentration first,
         flow second), both filled, then concentration normalized so that
         ``conc × flow`` matches the expected daily load.
+    pattern_window_days : float, optional
+        When set, pattern scaling uses only clean data from this many days
+        before each gap start.  Passed through to ``pattern_fill()``.
     """
     valid_modes = ("concentration", "flow", "load")
     if mode not in valid_modes:
@@ -503,8 +523,7 @@ def pattern_fill_dataset(
         results = pattern_fill(
             [series],
             pattern=pat,
-            scaling=scaling,
-            window=window,
+            pattern_window_days=pattern_window_days,
             blend_minutes=blend_minutes,
             normalize_area=True,
         )
@@ -530,16 +549,14 @@ def pattern_fill_dataset(
     conc_results = pattern_fill(
         [conc_series],
         pattern=conc_pat,
-        scaling=scaling,
-        window=window,
+        pattern_window_days=pattern_window_days,
         blend_minutes=blend_minutes,
         normalize_area=False,
     )
     flow_results = pattern_fill(
         [flow_series],
         pattern=flow_pat,
-        scaling=scaling,
-        window=window,
+        pattern_window_days=pattern_window_days,
         blend_minutes=blend_minutes,
         normalize_area=False,
     )
@@ -549,7 +566,6 @@ def pattern_fill_dataset(
     # Step 2: compute daily load profile from clean data
     conc_clean = conc_series.dropna()
     flow_clean = flow_series.dropna()
-    # Align clean data to timestamps present in both
     common_idx = conc_clean.index.intersection(flow_clean.index)
 
     if len(common_idx) > 20:
@@ -580,13 +596,12 @@ def pattern_fill_dataset(
 
         # Step 3: normalize concentration fills so load matches expected
         nan_mask = conc_series.isna().values
-        runs = _find_nan_runs(nan_mask)
-        interior_runs = _classify_runs(runs, len(conc_series))
+        runs = find_nan_runs(nan_mask)
+        interior_runs = classify_runs(runs, len(conc_series))
 
         for gap_start, gap_stop in interior_runs:
             gap_idx = conc_series.index[gap_start:gap_stop]
 
-            # Expected load for the gap period
             expected_load = np.empty(len(gap_idx))
             for i, ts in enumerate(gap_idx):
                 frac_h = ts.hour + ts.minute / 60.0 + ts.second / 3600.0
@@ -601,7 +616,6 @@ def pattern_fill_dataset(
 
             expected_sum = expected_load.sum()
 
-            # Actual load from fills
             gap_conc = filled_conc.iloc[gap_start:gap_stop].values
             gap_flow = filled_flow.iloc[gap_start:gap_stop].values
             actual_sum = (gap_conc * gap_flow).sum()
@@ -616,8 +630,7 @@ def pattern_fill_dataset(
         function_info=func_info,
         parameters=Parameters(
             mode=mode,
-            scaling=scaling,
-            window=window,
+            pattern_window_days=pattern_window_days,
             blend_minutes=blend_minutes,
         ),
         description=(

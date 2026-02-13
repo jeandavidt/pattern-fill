@@ -1,6 +1,6 @@
 [project]
 name = "pattern-fill"
-version = "0.1.4"
+version = "0.1.5"
 description = "Time series gap-filling using daily diurnal patterns"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -9,16 +9,14 @@ dependencies = [
     "pandas",
     "scipy",
     "meteaudata>=0.11.0",
-    # Note: pydantic is required by meteaudata, but we don't constrain it here
-    # because Pyodide includes pydantic as a built-in package.
-    # When running in WASM, micropip will use Pyodide's built-in pydantic
-    # rather than trying to install from PyPI (which would fail due to
-    # pydantic-core not having WASM wheels).
+    "altair>=5.5.0",
+    "matplotlib>=3.10.8",
+    "wigglystuff>=0.2.27",
 ]
 
 [project.optional-dependencies]
 interactive = [
-    "marimo>=0.19.8",
+    "marimo>=0.19.11",
     "altair>=5.0.0,<6.0.0",
     "wigglystuff>=0.2.21",
     "matplotlib",
