@@ -2,17 +2,19 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "altair==6.0.0",
+#     "marimo>=0.19.11",
 #     "matplotlib==3.10.8",
 #     "meteaudata==0.11.0",
 #     "numpy==2.2.6",
 #     "pandas==2.3.3",
-#     "pattern-fill==0.1.4",
+#     "pattern-fill",
 #     "wigglystuff==0.2.24",
 # ]
 # ///
+
 import marimo
 
-__generated_with = "0.19.9"
+__generated_with = "0.19.11"
 app = marimo.App(width="full")
 
 
@@ -32,7 +34,7 @@ async def _():
         await micropip.install("altair>=5.0.0,<6.0.0")
         # Note: pydantic is included in Pyodide as a built-in package (v2.12.5)
         # Don't install it via micropip - it will use the built-in version
-        await micropip.install("pattern-fill==0.1.4")
+        await micropip.install("pattern-fill")
         print("✅ All packages installed successfully!")
     return
 
@@ -118,13 +120,19 @@ def _(np, pd):
         base = 0.6 * np.sin(2 * np.pi * (hours - 6) / 24) + 0.2 * np.sin(
             4 * np.pi * (hours - 3) / 24
         )
-        noise = 0.08 * rng.standard_normal(len(index))
+        # Non-stationary noise: louder in the first week, quieter in the second.
+        # This makes the AR window setting visibly affect gap-fill variability:
+        # a short window before a gap in the quiet period gives less noise than
+        # a long window that reaches back into the loud period.
+        day = (index - index[0]).total_seconds() / 86400
+        noise_std = np.where(day < 7, 0.25, 0.04)
+        noise = noise_std * rng.standard_normal(len(index))
         raw = base + noise
         values = 30 + 15 * (raw - raw.min()) / (raw.max() - raw.min())
         series = pd.Series(values, index=index, name="NH4")
-        series.iloc[200:248] = np.nan
-        series.iloc[500:524] = np.nan
-        series.iloc[900:1000] = np.nan
+        series.iloc[200:248] = np.nan   # gap in the loud first week
+        series.iloc[500:524] = np.nan   # gap near the transition
+        series.iloc[900:1000] = np.nan  # gap in the quiet second week
         return series.to_frame()
 
     return (generate_demo_data,)
@@ -499,6 +507,34 @@ def _(mo, pattern_mode):
         show_value=True,
     )
 
+    # Pattern window slider (days of clean data used for normalization)
+    pattern_window_days_slider = mo.ui.slider(
+        start=1,
+        stop=30,
+        step=1,
+        value=7,
+        label="Pattern window (days)",
+        show_value=True,
+    )
+
+    # AR window slider (days of clean data used to fit the AR model)
+    ar_window_days_slider = mo.ui.slider(
+        start=1,
+        stop=30,
+        step=1,
+        value=7,
+        label="AR window (days)",
+        show_value=True,
+    )
+
+    # Random seed for reproducible noise
+    seed_number = mo.ui.number(
+        start=0,
+        stop=99999,
+        step=1,
+        value=42,
+        label="Random seed",
+    )
 
     # Create count sliders based on mode
     n_points_slider = None
@@ -520,8 +556,11 @@ def _(mo, pattern_mode):
                 fit_checkbox,
                 normalize_checkbox,
                 blend_minutes_slider,
+                pattern_window_days_slider,
                 add_noise_checkbox,
                 ar_order_slider,
+                ar_window_days_slider,
+                seed_number,
                 n_points_slider,
             ],
             justify="start",
@@ -544,8 +583,11 @@ def _(mo, pattern_mode):
                 fit_checkbox,
                 normalize_checkbox,
                 blend_minutes_slider,
+                pattern_window_days_slider,
                 add_noise_checkbox,
                 ar_order_slider,
+                ar_window_days_slider,
+                seed_number,
                 n_components_slider,
             ],
             justify="start",
@@ -555,14 +597,17 @@ def _(mo, pattern_mode):
 
     _out
     return (
+        add_noise_checkbox,
+        ar_order_slider,
+        ar_window_days_slider,
         blend_minutes_slider,
         day_type_radio,
         fit_checkbox,
         n_components_slider,
         n_points_slider,
         normalize_checkbox,
-        add_noise_checkbox,
-        ar_order_slider,
+        pattern_window_days_slider,
+        seed_number,
     )
 
 
@@ -1667,11 +1712,14 @@ def _(
     add_noise_checkbox,
     alt,
     ar_order_slider,
+    ar_window_days_slider,
     blend_minutes_slider,
     mo,
     normalize_checkbox,
     pattern_fill,
+    pattern_window_days_slider,
     pd,
+    seed_number,
     series,
 ):
     mo.stop(
@@ -1687,11 +1735,13 @@ def _(
     _results = pattern_fill(
         [series],
         pattern=_pat_arg,
-        scaling="local",
+        pattern_window_days=pattern_window_days_slider.value,
         normalize_area=normalize_checkbox.value,
         blend_minutes=blend_minutes_slider.value,
         add_noise=add_noise_checkbox.value,
         ar_order=ar_order_slider.value,
+        ar_window_days=ar_window_days_slider.value if add_noise_checkbox.value else None,
+        random_seed=int(seed_number.value) if add_noise_checkbox.value else None,
     )
     _filled, _steps = _results[0]
 
@@ -1820,10 +1870,171 @@ def _(
 
 @app.cell
 def _(
+    active_patterns,
+    add_noise_checkbox,
+    ar_order_slider,
+    ar_window_days_slider,
+    mo,
+    np,
+    pattern_window_days_slider,
+    plt,
+    series,
+):
+    """Diagnostic plots showing intermediate steps of pattern_fill algorithm."""
+    mo.stop(not active_patterns)
+    mo.stop(not add_noise_checkbox.value)  # Only show when noise is enabled
+
+    from pattern_fill.gap_fill import find_nan_runs, classify_runs, collect_window_idx, select_pattern
+    from pattern_fill.stochastic import fit_ar_model
+
+    if len(active_patterns) == 1 and "all days" in active_patterns:
+        _pat_arg = active_patterns["all days"]
+    else:
+        _pat_arg = active_patterns
+
+    # Focus on the first interior gap for diagnostics
+    _nan_mask = series.isna().values
+    runs = find_nan_runs(_nan_mask)
+    interior_runs = classify_runs(runs, len(series))
+
+    if not interior_runs:
+        mo.stop(True, mo.md("No interior gaps to analyze"))
+
+    # Analyze first gap
+    start, stop = interior_runs[0]
+    gap_start_time = series.index[start]
+    original_clean_mask = ~series.isna().values
+
+    # Collect pattern window
+    pattern_win_idx = collect_window_idx(
+        original_clean_mask, series.index, gap_start_time,
+        pattern_window_days_slider.value, min_count=2
+    )
+
+    # Collect AR window
+    ar_win_idx = collect_window_idx(
+        original_clean_mask, series.index, gap_start_time,
+        ar_window_days_slider.value if add_noise_checkbox.value else None,
+        min_count=ar_order_slider.value + 1
+    )
+
+    # Create figure with 3 subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 8), sharex=True)
+
+    # Plot 1: Pattern window data
+    ax1.plot(series.index, series.values, 'o-', alpha=0.3, label='All data', markersize=2)
+    if len(pattern_win_idx) > 0:
+        ax1.plot(
+            series.index[pattern_win_idx],
+            series.iloc[pattern_win_idx].values,
+            'go',
+            markersize=4,
+            label=f'Pattern window ({len(pattern_win_idx)} pts)'
+        )
+    ax1.axvline(gap_start_time, color='r', linestyle='--', label='Gap start')
+    ax1.set_ylabel('Value')
+    ax1.set_title(f'Pattern Window: {pattern_window_days_slider.value} days ({len(pattern_win_idx)} clean points)')
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3)
+
+    # Plot 2: AR window data with residuals
+    ax2.plot(series.index, series.values, 'o-', alpha=0.3, label='All  data', markersize=2)
+    if len(ar_win_idx) > 0:
+        ax2.plot(
+            series.index[ar_win_idx],
+            series.iloc[ar_win_idx].values,
+            'bo',
+            markersize=4,
+            label=f'AR window ({len(ar_win_idx)} pts)'
+        )
+
+        # Compute residuals for AR window
+        ar_times = series.index[ar_win_idx]
+        ar_data = series.iloc[ar_win_idx].values
+        ar_hours = (ar_times.hour + ar_times.minute / 60.0 + ar_times.second / 3600.0).values
+
+        # Local scaling for AR window
+        local_min = float(ar_data.min())
+        local_max = float(ar_data.max())
+        local_dr = local_max - local_min if abs(local_max - local_min) > 1e-12 else 1.0
+
+        # Pattern predictions
+        ar_pred = np.array([
+            select_pattern(_pat_arg, ts).evaluate(np.array([h]))[0]
+            for ts, h in zip(ar_times, ar_hours)
+        ]) * local_dr + local_min
+
+        ax2.plot(ar_times, ar_pred, 'r-', linewidth=2, label='Pattern (local scale)')
+
+        # Residuals
+        residuals = ar_data - ar_pred
+
+        # Show statistical summary
+        ax2.text(
+            0.02, 0.98,
+            f'Window: {len(ar_win_idx)} pts\nStd(resid): {np.std(residuals):.3f}\nRange: [{local_min:.1f}, {local_max:.1f}]',
+            transform=ax2.transAxes,
+            fontsize=8,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        )
+    ax2.axvline(gap_start_time, color='r', linestyle='--', label='Gap start')
+    ax2.set_ylabel('Value')
+    ax2.set_title(f'AR Window: {ar_window_days_slider.value} days ({len(ar_win_idx)} clean points)')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+
+    # Plot 3: Residuals time series
+    if len(ar_win_idx) > 0:
+        ax3.plot(ar_times, residuals, 'ko-', markersize=3, label='Residuals')
+        ax3.axhline(0, color='gray', linestyle='--', alpha=0.5)
+        ax3.axhline(np.std(residuals), color='orange', linestyle='--', alpha=0.5, label=f'±1 std ({np.std(residuals):.3f})')
+        ax3.axhline(-np.std(residuals), color='orange', linestyle='--', alpha=0.5)
+
+        # Fit AR model
+        ar_coeffs = fit_ar_model(residuals, ar_order_slider.value)
+        ax3.text(
+            0.02, 0.98,
+            f'AR({ar_order_slider.value}) coeffs: {ar_coeffs}',
+            transform=ax3.transAxes,
+            fontsize=7,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5)
+        )
+    ax3.axvline(gap_start_time, color='r', linestyle='--', label='Gap start')
+    ax3.set_xlabel('Time')
+    ax3.set_ylabel('Residual')
+    ax3.set_title('Residuals (Data - Pattern)')
+    ax3.legend(fontsize=8)
+    ax3.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    mo.vstack([
+        mo.md(f"""
+        ## 🔬 Diagnostic Plots
+
+        **Gap analyzed:** Index {start}-{stop} ({stop-start} points) starting at {gap_start_time}
+
+        These plots show how the window sliders actually affect the computation:
+        - **Top**: Data points used for pattern scaling (green)
+        - **Middle**: Data points used for AR noise fitting (blue) with local pattern fit (red)
+        - **Bottom**: Residuals from which AR coefficients are estimated
+
+        **Try changing the sliders and watch these plots update!**
+        """),
+        fig
+    ])
+    return
+
+
+@app.cell
+def _(
     Signal,
     active_patterns,
     add_noise_checkbox,
     ar_order_slider,
+    ar_window_days_slider,
     base64,
     blend_minutes_slider,
     df,
@@ -1833,6 +2044,8 @@ def _(
     original_dataset,
     original_signal,
     pattern_fill,
+    pattern_window_days_slider,
+    seed_number,
     series,
     shutil,
     tempfile,
@@ -1855,6 +2068,7 @@ def _(
         blend_minutes,
         add_noise,
         ar_order,
+        random_seed,
         import_type,
         original_signal,
         original_dataset,
@@ -1876,11 +2090,13 @@ def _(
                 [ts_name],
                 pattern_fill,
                 pattern=pattern_arg,
-                scaling="local",
+                pattern_window_days=pattern_window_days_slider.value,
                 normalize_area=normalize,
                 blend_minutes=blend_minutes,
                 add_noise=add_noise,
                 ar_order=ar_order,
+                ar_window_days=ar_window_days_slider.value if add_noise else None,
+                random_seed=random_seed,
             )
 
             # Update the dataset with the processed signal
@@ -1955,11 +2171,13 @@ def _(
             [ts_name_to_process],
             pattern_fill,
             pattern=pattern_arg,
-            scaling="local",
+            pattern_window_days=pattern_window_days_slider.value,
             normalize_area=normalize,
             blend_minutes=blend_minutes,
             add_noise=add_noise,
             ar_order=ar_order,
+            ar_window_days=ar_window_days_slider.value if add_noise else None,
+            random_seed=random_seed,
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2002,6 +2220,7 @@ def _(
         blend_minutes_slider.value,
         add_noise_checkbox.value,
         ar_order_slider.value,
+        int(seed_number.value) if add_noise_checkbox.value else None,
         import_type,
         original_signal,
         original_dataset,
@@ -2010,8 +2229,35 @@ def _(
 
 
 @app.cell
-def _(active_patterns, json, mo):
+def _(
+    active_patterns,
+    add_noise_checkbox,
+    ar_order_slider,
+    ar_window_days_slider,
+    blend_minutes_slider,
+    json,
+    mo,
+    normalize_checkbox,
+    pattern_window_days_slider,
+    seed_number,
+):
     mo.stop(not active_patterns)
+
+    _noise_args = ""
+    if add_noise_checkbox.value:
+        _noise_args = (
+            f"    add_noise=True,\n"
+            f"    ar_order={ar_order_slider.value},\n"
+            f"    ar_window_days={ar_window_days_slider.value},\n"
+            f"    random_seed={int(seed_number.value)},\n"
+        )
+
+    _common_kwargs = (
+        f"    pattern_window_days={pattern_window_days_slider.value},\n"
+        f"    blend_minutes={blend_minutes_slider.value},\n"
+        f"    normalize_area={normalize_checkbox.value},\n"
+        + _noise_args
+    )
 
     if len(active_patterns) == 1:
         _pat = list(active_patterns.values())[0]
@@ -2024,7 +2270,8 @@ def _(active_patterns, json, mo):
             '#     input_time_series_names=["raw"],\n'
             "#     transform_function=pattern_fill,\n"
             "#     pattern=pattern,\n"
-            "# )"
+            + "".join(f"#     {line}\n" for line in _common_kwargs.splitlines())
+            + "# )"
         )
     else:
         _export = {k: v.to_dict() for k, v in active_patterns.items()}
@@ -2039,7 +2286,8 @@ def _(active_patterns, json, mo):
             '#     input_time_series_names=["raw"],\n'
             "#     transform_function=pattern_fill,\n"
             "#     pattern=patterns,\n"
-            "# )"
+            + "".join(f"#     {line}\n" for line in _common_kwargs.splitlines())
+            + "# )"
         )
 
     _json_str = json.dumps(_export, indent=2)
