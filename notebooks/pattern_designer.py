@@ -1,9 +1,9 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "altair==6.0.0",
+#     "altair",
 #     "marimo>=0.19.11",
-#     "matplotlib==3.10.8",
+#     "matplotlib",
 #     "meteaudata==0.11.0",
 #     "numpy==2.2.6",
 #     "pandas==2.3.3",
