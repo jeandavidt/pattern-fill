@@ -8,6 +8,14 @@ from pattern_fill.stochastic import (
     generate_ar_noise,
 )
 
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("sane-figs")
+except Exception:
+    __version__ = "dev"  # fallback for editable/dev installs
+__author__ = "Jean-David T."
+__license__ = "MIT"
+
 __all__ = [
     "DailyPattern",
     "SineComponent",

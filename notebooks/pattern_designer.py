@@ -2,12 +2,14 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #     "altair",
+#     "anthropic==0.79.0",
 #     "marimo>=0.19.11",
 #     "matplotlib",
 #     "meteaudata==0.11.0",
 #     "numpy==2.2.6",
 #     "pandas==2.3.3",
 #     "pattern-fill",
+#     "pydantic-ai-slim==1.60.0",
 #     "wigglystuff==0.2.24",
 # ]
 # ///
@@ -47,13 +49,7 @@ def _():
     import altair as alt
     import matplotlib.pyplot as plt
     from wigglystuff import ChartPuck
-    from pattern_fill import (
-        DailyPattern,
-        SineComponent,
-        fit_pattern,
-        fit_sine_pattern,
-        pattern_fill,
-    )
+    import pattern_fill
     import io
     import json
     import os
@@ -65,14 +61,10 @@ def _():
 
     return (
         ChartPuck,
-        DailyPattern,
         Dataset,
         Signal,
-        SineComponent,
         alt,
         base64,
-        fit_pattern,
-        fit_sine_pattern,
         io,
         json,
         mo,
@@ -88,9 +80,9 @@ def _():
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md("""
-    # Pattern Designer
+def _(mo, pattern_fill):
+    mo.md(f"""
+    # Pattern Designer v{pattern_fill.__version__}
 
     Design daily diurnal patterns for gap-filling time series data.
     Upload your own data or use the built-in demo, then fit a pattern
@@ -1026,11 +1018,9 @@ def _(day_type_radio, mo, np, pattern_mode, profiles):
 
 @app.cell
 def _(
-    DailyPattern,
     SineComponent,
     day_type_radio,
     fit_checkbox,
-    fit_pattern,
     fit_sine_pattern,
     get_sine_amplitudes,
     get_sine_baseline,
@@ -1044,6 +1034,7 @@ def _(
     n_components_slider,
     n_points_slider,
     np,
+    pattern_fill,
     pattern_mode,
     series,
     set_sine_amplitudes,
@@ -1064,7 +1055,7 @@ def _(
 
         if day_type_radio.value == "all days":
             if _is_fit_mode:
-                fitted_patterns["all days"] = fit_pattern(
+                fitted_patterns["all days"] = pattern_fill.fit_pattern(
                     series,
                     n_control_points=_n_points,
                     day_type="all",
@@ -1079,7 +1070,7 @@ def _(
                     else [0]
                 )
                 _values = np.full(_n_points, 0.5)
-                fitted_patterns["all days"] = DailyPattern(
+                fitted_patterns["all days"] = pattern_fill.DailyPattern(
                     hours=list(_hours),
                     values=list(_values),
                     name="manual",
@@ -1088,12 +1079,12 @@ def _(
         else:  # weekdays + weekends
             _wd_mask = series.index.dayofweek < 5
             if _is_fit_mode:
-                fitted_patterns["weekday"] = fit_pattern(
+                fitted_patterns["weekday"] = pattern_fill.fit_pattern(
                     series[_wd_mask],
                     n_control_points=_n_points,
                     day_type="weekday",
                 )
-                fitted_patterns["weekend"] = fit_pattern(
+                fitted_patterns["weekend"] = pattern_fill.fit_pattern(
                     series[~_wd_mask],
                     n_control_points=_n_points,
                     day_type="weekend",
@@ -1108,13 +1099,13 @@ def _(
                     else [0]
                 )
                 _values = np.full(_n_points, 0.5)
-                fitted_patterns["weekday"] = DailyPattern(
+                fitted_patterns["weekday"] = pattern_fill.DailyPattern(
                     hours=list(_hours),
                     values=list(_values),
                     name="manual_weekday",
                     day_type="weekday",
                 )
-                fitted_patterns["weekend"] = DailyPattern(
+                fitted_patterns["weekend"] = pattern_fill.DailyPattern(
                     hours=list(_hours),
                     values=list(_values),
                     name="manual_weekend",
@@ -1165,7 +1156,7 @@ def _(
                     )
                     for i in range(_n_components)
                 ]
-                fitted_patterns["all days"] = DailyPattern(
+                fitted_patterns["all days"] = pattern_fill.pattern_fill.DailyPattern(
                     sine_components=_components,
                     baseline=_baseline,
                     name="manual_sine",
@@ -1220,7 +1211,7 @@ def _(
                     )
                     for i in range(_n_components)
                 ]
-                fitted_patterns["weekday"] = DailyPattern(
+                fitted_patterns["weekday"] = pattern_fill.DailyPattern(
                     sine_components=_components,
                     baseline=_baseline,
                     name="manual_sine_weekday",
@@ -1247,7 +1238,7 @@ def _(
                     )
                     for i in range(_n_components)
                 ]
-                fitted_patterns["weekend"] = DailyPattern(
+                fitted_patterns["weekend"] = pattern_fill.DailyPattern(
                     sine_components=_weekend_components,
                     baseline=_weekend_baseline,
                     name="manual_sine_weekend",
@@ -1286,12 +1277,12 @@ def _(fit_checkbox, fitted_patterns, mo):
 @app.cell
 def _(
     ChartPuck,
-    DailyPattern,
     day_type_radio,
     get_editor_patterns,
     mo,
     n_points_slider,
     np,
+    pattern_fill,
     pattern_mode,
     silhouette_data,
 ):
@@ -1329,7 +1320,7 @@ def _(
 
             # Create pattern from current puck positions
             if len(widget.x) >= 2:
-                pattern = DailyPattern(
+                pattern = pattern_fill.DailyPattern(
                     hours=list(widget.x),
                     values=list(widget.y),
                     name=f"preview_{dt_key}",
@@ -1407,10 +1398,10 @@ def _(
 
 @app.cell
 def _(
-    DailyPattern,
     day_type_radio,
     mo,
     n_points_slider,
+    pattern_fill,
     puck_all,
     puck_weekday,
     puck_weekend,
@@ -1427,7 +1418,7 @@ def _(
         """Read current puck positions and commit to mo.state."""
         _patterns = {}
         if day_type_radio.value == "all days" and puck_all is not None:
-            _patterns["all days"] = DailyPattern(
+            _patterns["all days"] = pattern_fill.DailyPattern(
                 hours=list(puck_all.x),
                 values=list(puck_all.y),
                 name="manual",
@@ -1435,14 +1426,14 @@ def _(
             )
         else:
             if puck_weekday is not None:
-                _patterns["weekday"] = DailyPattern(
+                _patterns["weekday"] = pattern_fill.DailyPattern(
                     hours=list(puck_weekday.x),
                     values=list(puck_weekday.y),
                     name="manual_weekday",
                     day_type="weekday",
                 )
             if puck_weekend is not None:
-                _patterns["weekend"] = DailyPattern(
+                _patterns["weekend"] = pattern_fill.DailyPattern(
                     hours=list(puck_weekend.x),
                     values=list(puck_weekend.y),
                     name="manual_weekend",
@@ -1732,7 +1723,7 @@ def _(
     else:
         _pat_arg = active_patterns
 
-    _results = pattern_fill(
+    _results = pattern_fill.pattern_fill(
         [series],
         pattern=_pat_arg,
         pattern_window_days=pattern_window_days_slider.value,
@@ -2088,7 +2079,7 @@ def _(
             # Apply pattern_fill to the signal
             target_signal = target_signal.process(
                 [ts_name],
-                pattern_fill,
+                pattern_fill.pattern_fill,
                 pattern=pattern_arg,
                 pattern_window_days=pattern_window_days_slider.value,
                 normalize_area=normalize,
@@ -2169,7 +2160,7 @@ def _(
         # Apply pattern_fill using Signal.process()
         signal = signal.process(
             [ts_name_to_process],
-            pattern_fill,
+            pattern_fill.pattern_fill,
             pattern=pattern_arg,
             pattern_window_days=pattern_window_days_slider.value,
             normalize_area=normalize,
@@ -2263,8 +2254,8 @@ def _(
         _pat = list(active_patterns.values())[0]
         _export = _pat.to_dict()
         _snippet = (
-            "from pattern_fill import DailyPattern, pattern_fill\n\n"
-            f"pattern = DailyPattern.from_json('{_pat.to_json()}')\n\n"
+            "from pattern_fill import pattern_fill.DailyPattern, pattern_fill\n\n"
+            f"pattern = pattern_fill.DailyPattern.from_json('{_pat.to_json()}')\n\n"
             "# Use with metEAUdata:\n"
             "# signal.process(\n"
             '#     input_time_series_names=["raw"],\n'
@@ -2278,9 +2269,9 @@ def _(
         _pjson = json.dumps(_export)
         _snippet = (
             "import json\n"
-            "from pattern_fill import DailyPattern, pattern_fill\n\n"
+            "from pattern_fill import pattern_fill.DailyPattern, pattern_fill\n\n"
             f"raw = json.loads('{_pjson}')\n"
-            "patterns = {k: DailyPattern.from_dict(v) for k, v in raw.items()}\n\n"
+            "patterns = {k: pattern_fill.DailyPattern.from_dict(v) for k, v in raw.items()}\n\n"
             "# Use with metEAUdata:\n"
             "# signal.process(\n"
             '#     input_time_series_names=["raw"],\n'

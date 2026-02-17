@@ -1482,8 +1482,6 @@ name = "pattern-fill"
 version = "0.1.5"
 source = { editable = "." }
 dependencies = [
-    { name = "altair" },
-    { name = "matplotlib" },
     { name = "meteaudata" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1508,10 +1506,8 @@ interactive = [
 
 [package.metadata]
 requires-dist = [
-    { name = "altair", specifier = ">=5.5.0" },
-    { name = "altair", marker = "extra == 'interactive'", specifier = ">=5.0.0,<6.0.0" },
+    { name = "altair", marker = "extra == 'interactive'" },
     { name = "marimo", marker = "extra == 'interactive'", specifier = ">=0.19.11" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "matplotlib", marker = "extra == 'interactive'" },
     { name = "meteaudata", specifier = ">=0.11.0" },
     { name = "numpy" },
