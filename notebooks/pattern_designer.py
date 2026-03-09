@@ -1018,10 +1018,8 @@ def _(day_type_radio, mo, np, pattern_mode, profiles):
 
 @app.cell
 def _(
-    SineComponent,
     day_type_radio,
     fit_checkbox,
-    fit_sine_pattern,
     get_sine_amplitudes,
     get_sine_baseline,
     get_sine_frequencies,
@@ -1119,7 +1117,7 @@ def _(
         if day_type_radio.value == "all days":
             if _is_fit_mode:
                 # Fit the pattern
-                fitted_patterns["all days"] = fit_sine_pattern(
+                fitted_patterns["all days"] = pattern_fill.fit_sine_pattern(
                     series,
                     n_components=_n_components,
                     day_type="all",
@@ -1149,14 +1147,14 @@ def _(
                     _phases = list(_phases) + [13.0]
 
                 _components = [
-                    SineComponent(
+                    pattern_fill.SineComponent(
                         amplitude=_amps[i],
                         frequency=_freqs[i],
                         phase=_phases[i],
                     )
                     for i in range(_n_components)
                 ]
-                fitted_patterns["all days"] = pattern_fill.pattern_fill.DailyPattern(
+                fitted_patterns["all days"] = pattern_fill.DailyPattern(
                     sine_components=_components,
                     baseline=_baseline,
                     name="manual_sine",
@@ -1166,12 +1164,12 @@ def _(
             _wd_mask = series.index.dayofweek < 5
             if _is_fit_mode:
                 # Fit both patterns
-                fitted_patterns["weekday"] = fit_sine_pattern(
+                fitted_patterns["weekday"] = pattern_fill.fit_sine_pattern(
                     series[_wd_mask],
                     n_components=_n_components,
                     day_type="weekday",
                 )
-                fitted_patterns["weekend"] = fit_sine_pattern(
+                fitted_patterns["weekend"] = pattern_fill.fit_sine_pattern(
                     series[~_wd_mask],
                     n_components=_n_components,
                     day_type="weekend",
@@ -1204,7 +1202,7 @@ def _(
                     _phases = list(_phases) + [13.0]
 
                 _components = [
-                    SineComponent(
+                    pattern_fill.SineComponent(
                         amplitude=_amps[i],
                         frequency=_freqs[i],
                         phase=_phases[i],
@@ -1231,7 +1229,7 @@ def _(
                     _weekend_phases = list(_weekend_phases) + [13.0]
 
                 _weekend_components = [
-                    SineComponent(
+                    pattern_fill.SineComponent(
                         amplitude=_weekend_amps[i],
                         frequency=_weekend_freqs[i],
                         phase=_weekend_phases[i],

@@ -10,7 +10,7 @@ from pattern_fill.stochastic import (
 
 try:
     from importlib.metadata import version as _pkg_version
-    __version__ = _pkg_version("sane-figs")
+    __version__ = _pkg_version("pattern-fill")
 except Exception:
     __version__ = "dev"  # fallback for editable/dev installs
 __author__ = "Jean-David T."
