@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pattern_fill.pattern import DailyPattern, SineComponent
+from pattern_fill.pattern import DailyPattern, SineComponent, GaussianComponent
 
 
 def _simple_pattern() -> DailyPattern:
@@ -122,7 +122,7 @@ class TestSineModeInit:
 
     def test_cannot_mix_modes(self):
         """Cannot specify both spline and sine parameters."""
-        with pytest.raises(ValueError, match="Cannot specify both"):
+        with pytest.raises(ValueError, match="more than one mode"):
             DailyPattern(
                 hours=[0, 12],
                 values=[0.5, 0.8],
@@ -131,7 +131,7 @@ class TestSineModeInit:
 
     def test_must_specify_mode(self):
         """Must specify either spline or sine parameters."""
-        with pytest.raises(ValueError, match="Must specify either"):
+        with pytest.raises(ValueError, match="Must specify"):
             DailyPattern()
 
     def test_empty_sine_components(self):
@@ -314,3 +314,137 @@ class TestSineModeSerialization:
         pattern = DailyPattern.from_dict(old_dict)
         assert pattern.mode == "spline"
         assert pattern.hours == [0, 6, 12, 18]
+
+
+# ---------------------------------------------------------------------------
+# Gaussian mode tests
+# ---------------------------------------------------------------------------
+
+class TestGaussianModeInit:
+    def test_basic_creation(self):
+        p = DailyPattern(
+            gaussian_components=[GaussianComponent(0.8, 8.0, 2.0)],
+            baseline=0.1,
+        )
+        assert p.mode == "gaussian"
+        assert p.baseline == 0.1
+        assert len(p.gaussian_components) == 1
+
+    def test_mode_mixing_error(self):
+        with pytest.raises(ValueError, match="more than one mode"):
+            DailyPattern(
+                hours=[0, 12],
+                values=[0.0, 1.0],
+                gaussian_components=[GaussianComponent(0.5, 6.0, 2.0)],
+            )
+
+    def test_empty_components_error(self):
+        with pytest.raises(ValueError, match="empty"):
+            DailyPattern(gaussian_components=[])
+
+    def test_invalid_baseline_error(self):
+        with pytest.raises(ValueError, match="baseline"):
+            DailyPattern(
+                gaussian_components=[GaussianComponent(0.5, 6.0, 2.0)],
+                baseline=1.5,
+            )
+
+
+class TestGaussianModeEvaluate:
+    def _pattern(self):
+        return DailyPattern(
+            gaussian_components=[GaussianComponent(0.7, 8.0, 2.0)],
+            baseline=0.1,
+        )
+
+    def test_peak_above_baseline(self):
+        p = self._pattern()
+        val_at_peak = p.evaluate(np.array([8.0]))[0]
+        assert val_at_peak > 0.1
+
+    def test_values_clipped_to_01(self):
+        p = DailyPattern(
+            gaussian_components=[GaussianComponent(1.0, 6.0, 0.5)],
+            baseline=0.5,
+        )
+        h = np.linspace(0, 24, 97)
+        v = p.evaluate(h)
+        assert v.min() >= 0.0
+        assert v.max() <= 1.0
+
+    def test_periodicity(self):
+        p = self._pattern()
+        assert p.evaluate(np.array([0.0]))[0] == pytest.approx(
+            p.evaluate(np.array([24.0]))[0]
+        )
+
+    def test_midnight_spanning_symmetry(self):
+        p = DailyPattern(
+            gaussian_components=[GaussianComponent(0.6, 23.0, 2.0)],
+            baseline=0.0,
+        )
+        v_before = p.evaluate(np.array([22.0]))[0]
+        v_after = p.evaluate(np.array([0.0]))[0]
+        assert v_before == pytest.approx(v_after, rel=1e-6)
+
+
+class TestGaussianModeSerialization:
+    def _pattern(self):
+        return DailyPattern(
+            gaussian_components=[GaussianComponent(0.7, 8.0, 2.0)],
+            baseline=0.1,
+            name="my_gaussian",
+            day_type="weekday",
+        )
+
+    def test_to_dict_mode(self):
+        d = self._pattern().to_dict()
+        assert d["mode"] == "gaussian"
+        assert "gaussian_components" in d
+        assert d["baseline"] == 0.1
+
+    def test_from_dict_roundtrip(self):
+        p = self._pattern()
+        p2 = DailyPattern.from_dict(p.to_dict())
+        assert p2.mode == "gaussian"
+        assert p2.name == p.name
+        assert p2.day_type == p.day_type
+        assert p2.baseline == pytest.approx(p.baseline)
+
+    def test_json_roundtrip(self):
+        p = self._pattern()
+        p2 = DailyPattern.from_json(p.to_json())
+        assert p2.mode == "gaussian"
+        assert len(p2.gaussian_components) == 1
+        assert p2.gaussian_components[0].amplitude == pytest.approx(0.7)
+
+    def test_from_dict_baseline_default(self):
+        d = {
+            "mode": "gaussian",
+            "gaussian_components": [{"amplitude": 0.5, "center": 6.0, "width": 2.0}],
+        }
+        p = DailyPattern.from_dict(d)
+        assert p.baseline == 0.0
+
+
+class TestFromGaussiansFactory:
+    def test_from_tuples(self):
+        p = DailyPattern.from_gaussians([(0.8, 8.0, 2.0), (0.5, 18.0, 1.5)])
+        assert p.mode == "gaussian"
+        assert len(p.gaussian_components) == 2
+
+    def test_from_objects(self):
+        comps = [GaussianComponent(0.6, 10.0, 3.0)]
+        p = DailyPattern.from_gaussians(comps)
+        assert p.mode == "gaussian"
+
+    def test_default_baseline_zero(self):
+        p = DailyPattern.from_gaussians([(0.5, 6.0, 2.0)])
+        assert p.baseline == 0.0
+
+    def test_custom_name_and_day_type(self):
+        p = DailyPattern.from_gaussians(
+            [(0.5, 6.0, 2.0)], name="g", day_type="weekend"
+        )
+        assert p.name == "g"
+        assert p.day_type == "weekend"
