@@ -16,7 +16,7 @@
 
 import marimo
 
-__generated_with = "0.19.11"
+__generated_with = "0.18.0"
 app = marimo.App(width="full")
 
 
@@ -58,7 +58,6 @@ def _():
     import shutil
     import base64
     from meteaudata import Signal, Dataset, TimeSeries
-
     return (
         ChartPuck,
         Dataset,
@@ -80,10 +79,8 @@ def _():
 
 
 @app.cell
-def _(mo, pattern_fill):
+def _(mo):
     mo.md(f"""
-    # Pattern Designer v{pattern_fill.__version__}
-
     Design daily diurnal patterns for gap-filling time series data.
     Upload your own data or use the built-in demo, then fit a pattern
     automatically or shape one by hand.
@@ -99,6 +96,7 @@ def _(mo):
     Choose how you want to create your daily pattern:
     - **Spline**: Drag control points (pucks) to shape a smooth curve
     - **Sine Waves**: Combine multiple sine waves with adjustable amplitude, frequency, and phase
+    - **Gaussian**: Combine wrapped Gaussian (bell curve) components with adjustable amplitude, center, and width
     """)
     return
 
@@ -126,7 +124,6 @@ def _(np, pd):
         series.iloc[500:524] = np.nan   # gap near the transition
         series.iloc[900:1000] = np.nan  # gap in the quiet second week
         return series.to_frame()
-
     return (generate_demo_data,)
 
 
@@ -439,7 +436,7 @@ def _(alt, pd, series):
 @app.cell
 def _(mo):
     pattern_mode = mo.ui.radio(
-        options=["Spline", "Sine Waves"],
+        options=["Spline", "Sine Waves", "Gaussian"],
         value="Spline",
         label="Pattern type",
     )
@@ -485,7 +482,7 @@ def _(mo, pattern_mode):
     # Add noise checkbox
     add_noise_checkbox = mo.ui.checkbox(
         label="Add noise (AR model)",
-        value=False,
+        value=True,
     )
 
 
@@ -504,7 +501,7 @@ def _(mo, pattern_mode):
         start=1,
         stop=30,
         step=1,
-        value=7,
+        value=1,
         label="Pattern window (days)",
         show_value=True,
     )
@@ -514,7 +511,7 @@ def _(mo, pattern_mode):
         start=1,
         stop=30,
         step=1,
-        value=7,
+        value=1,
         label="AR window (days)",
         show_value=True,
     )
@@ -559,7 +556,7 @@ def _(mo, pattern_mode):
             gap=1.5,
             wrap=True,
         )
-    else:  # Sine Waves mode
+    elif pattern_mode.value == "Sine Waves":
         # Number of sine wave components
         n_components_slider = mo.ui.number(
             start=1,
@@ -567,6 +564,33 @@ def _(mo, pattern_mode):
             step=1,
             value=2,
             label="Number of sine waves",
+        )
+
+        _out = mo.hstack(
+            [
+                day_type_radio,
+                fit_checkbox,
+                normalize_checkbox,
+                blend_minutes_slider,
+                pattern_window_days_slider,
+                add_noise_checkbox,
+                ar_order_slider,
+                ar_window_days_slider,
+                seed_number,
+                n_components_slider,
+            ],
+            justify="start",
+            gap=1.5,
+            wrap=True,
+        )
+    else:  # Gaussian mode
+        # Number of Gaussian components
+        n_components_slider = mo.ui.number(
+            start=1,
+            stop=5,
+            step=1,
+            value=2,
+            label="Number of Gaussians",
         )
 
         _out = mo.hstack(
@@ -651,6 +675,58 @@ def _(mo, n_components_slider, pattern_mode):
         set_weekend_baseline,
         set_weekend_frequencies,
         set_weekend_phases,
+    )
+
+
+@app.cell
+def _(mo, n_components_slider, pattern_mode):
+    """State management for Gaussian parameters.
+
+    This cell always runs (no mo.stop) to ensure state variables are always available,
+    even when not in Gaussian mode.
+    """
+    # Determine n_components for default initialization
+    # Use 2 as default if slider doesn't exist yet or we're not in Gaussian mode
+    if pattern_mode.value == "Gaussian" and n_components_slider is not None:
+        _n = n_components_slider.value
+    else:
+        _n = 2
+
+    # Default values for initial state
+    # Gaussian: amplitude, center (hour), width (hours)
+    _default_gaussian_amplitudes = [0.4 if i == 0 else 0.2 for i in range(_n)]
+    _default_gaussian_centers = [8.0 if i == 0 else 16.0 for i in range(_n)]
+    _default_gaussian_widths = [2.0 for _ in range(_n)]
+    _default_gaussian_baseline = 0.1
+
+    # Weekday parameter states
+    get_gaussian_amplitudes, set_gaussian_amplitudes = mo.state(_default_gaussian_amplitudes)
+    get_gaussian_centers, set_gaussian_centers = mo.state(_default_gaussian_centers)
+    get_gaussian_widths, set_gaussian_widths = mo.state(_default_gaussian_widths)
+    get_gaussian_baseline, set_gaussian_baseline = mo.state(_default_gaussian_baseline)
+
+    # Weekend parameter states
+    get_weekend_gaussian_amplitudes, set_weekend_gaussian_amplitudes = mo.state(_default_gaussian_amplitudes)
+    get_weekend_gaussian_centers, set_weekend_gaussian_centers = mo.state(_default_gaussian_centers)
+    get_weekend_gaussian_widths, set_weekend_gaussian_widths = mo.state(_default_gaussian_widths)
+    get_weekend_gaussian_baseline, set_weekend_gaussian_baseline = mo.state(_default_gaussian_baseline)
+    return (
+        get_gaussian_amplitudes,
+        get_gaussian_baseline,
+        get_gaussian_centers,
+        get_gaussian_widths,
+        get_weekend_gaussian_amplitudes,
+        get_weekend_gaussian_baseline,
+        get_weekend_gaussian_centers,
+        get_weekend_gaussian_widths,
+        set_gaussian_amplitudes,
+        set_gaussian_baseline,
+        set_gaussian_centers,
+        set_gaussian_widths,
+        set_weekend_gaussian_amplitudes,
+        set_weekend_gaussian_baseline,
+        set_weekend_gaussian_centers,
+        set_weekend_gaussian_widths,
     )
 
 
@@ -936,6 +1012,286 @@ def _(
 
 
 @app.cell
+def _(
+    day_type_radio,
+    get_gaussian_amplitudes,
+    get_gaussian_baseline,
+    get_gaussian_centers,
+    get_gaussian_widths,
+    get_weekend_gaussian_amplitudes,
+    get_weekend_gaussian_baseline,
+    get_weekend_gaussian_centers,
+    get_weekend_gaussian_widths,
+    mo,
+    n_components_slider,
+    pattern_mode,
+    set_gaussian_amplitudes,
+    set_gaussian_baseline,
+    set_gaussian_centers,
+    set_gaussian_widths,
+    set_weekend_gaussian_amplitudes,
+    set_weekend_gaussian_baseline,
+    set_weekend_gaussian_centers,
+    set_weekend_gaussian_widths,
+):
+    """Create sliders for Gaussian parameters - values driven by state."""
+    mo.stop(pattern_mode.value != "Gaussian" or n_components_slider is None)
+
+    _n = n_components_slider.value
+
+    # Get current state values
+    _amp_vals = get_gaussian_amplitudes()
+    _center_vals = get_gaussian_centers()
+    _width_vals = get_gaussian_widths()
+    _baseline_val = get_gaussian_baseline()
+
+    _weekend_amp_vals = get_weekend_gaussian_amplitudes()
+    _weekend_center_vals = get_weekend_gaussian_centers()
+    _weekend_width_vals = get_weekend_gaussian_widths()
+    _weekend_baseline_val = get_weekend_gaussian_baseline()
+
+    # Ensure state has correct length (handle n_components changes)
+    if len(_amp_vals) != _n:
+        # Preserve existing values and add defaults for new components
+        _amp_vals = list(_amp_vals[:_n]) + [0.2] * max(0, _n - len(_amp_vals))
+        _center_vals = list(_center_vals[:_n]) + [12.0] * max(0, _n - len(_center_vals))
+        _width_vals = list(_width_vals[:_n]) + [2.0] * max(0, _n - len(_width_vals))
+        set_gaussian_amplitudes(_amp_vals)
+        set_gaussian_centers(_center_vals)
+        set_gaussian_widths(_width_vals)
+
+        # Do same for weekend
+        _weekend_amp_vals = list(_weekend_amp_vals[:_n]) + [0.2] * max(
+            0, _n - len(_weekend_amp_vals)
+        )
+        _weekend_center_vals = list(_weekend_center_vals[:_n]) + [12.0] * max(
+            0, _n - len(_weekend_center_vals)
+        )
+        _weekend_width_vals = list(_weekend_width_vals[:_n]) + [2.0] * max(
+            0, _n - len(_weekend_width_vals)
+        )
+        set_weekend_gaussian_amplitudes(_weekend_amp_vals)
+        set_weekend_gaussian_centers(_weekend_center_vals)
+        set_weekend_gaussian_widths(_weekend_width_vals)
+
+    # Create on_change handlers with gaussian_ prefix to avoid collision
+    def _gaussian_make_amplitude_handler(index):
+        def handler(value):
+            _vals = list(get_gaussian_amplitudes())
+            _vals[index] = value
+            set_gaussian_amplitudes(_vals)
+
+        return handler
+
+    def _gaussian_make_center_handler(index):
+        def handler(value):
+            _vals = list(get_gaussian_centers())
+            _vals[index] = value
+            set_gaussian_centers(_vals)
+
+        return handler
+
+    def _gaussian_make_width_handler(index):
+        def handler(value):
+            _vals = list(get_gaussian_widths())
+            _vals[index] = value
+            set_gaussian_widths(_vals)
+
+        return handler
+
+    # Similar handlers for weekend
+    def _gaussian_make_weekend_amplitude_handler(index):
+        def handler(value):
+            _vals = list(get_weekend_gaussian_amplitudes())
+            _vals[index] = value
+            set_weekend_gaussian_amplitudes(_vals)
+
+        return handler
+
+    def _gaussian_make_weekend_center_handler(index):
+        def handler(value):
+            _vals = list(get_weekend_gaussian_centers())
+            _vals[index] = value
+            set_weekend_gaussian_centers(_vals)
+
+        return handler
+
+    def _gaussian_make_weekend_width_handler(index):
+        def handler(value):
+            _vals = list(get_weekend_gaussian_widths())
+            _vals[index] = value
+            set_weekend_gaussian_widths(_vals)
+
+        return handler
+
+    # Weekday sliders
+    _gaussian_amplitude_sliders = mo.ui.array(
+        [
+            mo.ui.slider(
+                start=0.0,
+                stop=1.0,
+                step=0.01,
+                value=_amp_vals[_idx],
+                label=f"Gaussian {_idx + 1} Amplitude",
+                show_value=True,
+                on_change=_gaussian_make_amplitude_handler(_idx),
+            )
+            for _idx in range(_n)
+        ]
+    )
+
+    _gaussian_center_sliders = mo.ui.array(
+        [
+            mo.ui.slider(
+                start=0.0,
+                stop=24.0,
+                step=0.5,
+                value=_center_vals[_idx],
+                label=f"Gaussian {_idx + 1} Center (hour)",
+                show_value=True,
+                on_change=_gaussian_make_center_handler(_idx),
+            )
+            for _idx in range(_n)
+        ]
+    )
+
+    _gaussian_width_sliders = mo.ui.array(
+        [
+            mo.ui.slider(
+                start=0.5,
+                stop=6.0,
+                step=0.25,
+                value=_width_vals[_idx],
+                label=f"Gaussian {_idx + 1} Width (hours)",
+                show_value=True,
+                on_change=_gaussian_make_width_handler(_idx),
+            )
+            for _idx in range(_n)
+        ]
+    )
+
+    _gaussian_baseline_slider = mo.ui.slider(
+        start=0.0,
+        stop=1.0,
+        step=0.01,
+        value=_baseline_val,
+        label="Baseline",
+        show_value=True,
+        on_change=set_gaussian_baseline,
+    )
+
+    # Weekend sliders
+    _weekend_gaussian_amplitude_sliders = mo.ui.array(
+        [
+            mo.ui.slider(
+                start=0.0,
+                stop=1.0,
+                step=0.01,
+                value=_weekend_amp_vals[_idx],
+                label=f"Weekend Gaussian {_idx + 1} Amplitude",
+                show_value=True,
+                on_change=_gaussian_make_weekend_amplitude_handler(_idx),
+            )
+            for _idx in range(_n)
+        ]
+    )
+
+    _weekend_gaussian_center_sliders = mo.ui.array(
+        [
+            mo.ui.slider(
+                start=0.0,
+                stop=24.0,
+                step=0.5,
+                value=_weekend_center_vals[_idx],
+                label=f"Weekend Gaussian {_idx + 1} Center (hour)",
+                show_value=True,
+                on_change=_gaussian_make_weekend_center_handler(_idx),
+            )
+            for _idx in range(_n)
+        ]
+    )
+
+    _weekend_gaussian_width_sliders = mo.ui.array(
+        [
+            mo.ui.slider(
+                start=0.5,
+                stop=6.0,
+                step=0.25,
+                value=_weekend_width_vals[_idx],
+                label=f"Weekend Gaussian {_idx + 1} Width (hours)",
+                show_value=True,
+                on_change=_gaussian_make_weekend_width_handler(_idx),
+            )
+            for _idx in range(_n)
+        ]
+    )
+
+    _weekend_gaussian_baseline_slider = mo.ui.slider(
+        start=0.0,
+        stop=1.0,
+        step=0.01,
+        value=_weekend_baseline_val,
+        label="Weekend Baseline",
+        show_value=True,
+        on_change=set_weekend_gaussian_baseline,
+    )
+
+    # Display layout
+    _gaussian_weekday_rows = []
+    for _idx in range(_n):
+        _gaussian_weekday_rows.append(
+            mo.hstack(
+                [
+                    _gaussian_amplitude_sliders[_idx],
+                    _gaussian_center_sliders[_idx],
+                    _gaussian_width_sliders[_idx],
+                ],
+                gap=1,
+            )
+        )
+
+    _gaussian_weekend_rows = []
+    for _idx in range(_n):
+        _gaussian_weekend_rows.append(
+            mo.hstack(
+                [
+                    _weekend_gaussian_amplitude_sliders[_idx],
+                    _weekend_gaussian_center_sliders[_idx],
+                    _weekend_gaussian_width_sliders[_idx],
+                ],
+                gap=1,
+            )
+        )
+
+    _gaussian_elements = [
+        mo.md(
+            """
+            ### 📈 Gaussian Parameters
+
+            Configure each Gaussian (bell curve) component. Amplitude controls peak height,
+            center controls the hour of peak value, and width controls the spread (standard deviation).
+            """
+        ),
+        mo.md("**Weekday Pattern:**"),
+        *_gaussian_weekday_rows,
+        _gaussian_baseline_slider,
+    ]
+
+    if day_type_radio.value == "weekdays + weekends":
+        _gaussian_elements.extend(
+            [
+                mo.md("**Weekend Pattern:**"),
+                *_gaussian_weekend_rows,
+                _weekend_gaussian_baseline_slider,
+            ]
+        )
+
+    _gaussian_slider_display = mo.vstack(_gaussian_elements, gap=1)
+    _gaussian_slider_display
+    return
+
+
+@app.cell
 def _(day_type_radio, np, pd, series):
     def get_profile_stats(s, resolution_minutes=15):
         if s is None or not isinstance(s.index, pd.DatetimeIndex):
@@ -1020,6 +1376,10 @@ def _(day_type_radio, mo, np, pattern_mode, profiles):
 def _(
     day_type_radio,
     fit_checkbox,
+    get_gaussian_amplitudes,
+    get_gaussian_baseline,
+    get_gaussian_centers,
+    get_gaussian_widths,
     get_sine_amplitudes,
     get_sine_baseline,
     get_sine_frequencies,
@@ -1027,6 +1387,10 @@ def _(
     get_weekend_amplitudes,
     get_weekend_baseline,
     get_weekend_frequencies,
+    get_weekend_gaussian_amplitudes,
+    get_weekend_gaussian_baseline,
+    get_weekend_gaussian_centers,
+    get_weekend_gaussian_widths,
     get_weekend_phases,
     mo,
     n_components_slider,
@@ -1035,6 +1399,10 @@ def _(
     pattern_fill,
     pattern_mode,
     series,
+    set_gaussian_amplitudes,
+    set_gaussian_baseline,
+    set_gaussian_centers,
+    set_gaussian_widths,
     set_sine_amplitudes,
     set_sine_baseline,
     set_sine_frequencies,
@@ -1042,6 +1410,10 @@ def _(
     set_weekend_amplitudes,
     set_weekend_baseline,
     set_weekend_frequencies,
+    set_weekend_gaussian_amplitudes,
+    set_weekend_gaussian_baseline,
+    set_weekend_gaussian_centers,
+    set_weekend_gaussian_widths,
     set_weekend_phases,
 ):
     fitted_patterns = {}
@@ -1110,7 +1482,7 @@ def _(
                     day_type="weekend",
                 )
 
-    else:  # Sine Waves mode
+    elif pattern_mode.value == "Sine Waves":
         mo.stop(n_components_slider is None)
         _n_components = n_components_slider.value
 
@@ -1240,6 +1612,139 @@ def _(
                     sine_components=_weekend_components,
                     baseline=_weekend_baseline,
                     name="manual_sine_weekend",
+                    day_type="weekend",
+                )
+
+    else:  # Gaussian mode
+        mo.stop(n_components_slider is None)
+        _n_components = n_components_slider.value
+
+        if day_type_radio.value == "all days":
+            if _is_fit_mode:
+                # Fit the pattern
+                fitted_patterns["all days"] = pattern_fill.fit_gaussian_pattern(
+                    series,
+                    n_components=_n_components,
+                    day_type="all",
+                )
+
+                # Extract fitted parameters and update state
+                _fitted_pat = fitted_patterns["all days"]
+                _new_amps = [c.amplitude for c in _fitted_pat.gaussian_components]
+                _new_centers = [c.center for c in _fitted_pat.gaussian_components]
+                _new_widths = [c.width for c in _fitted_pat.gaussian_components]
+
+                set_gaussian_amplitudes(_new_amps)
+                set_gaussian_centers(_new_centers)
+                set_gaussian_widths(_new_widths)
+                set_gaussian_baseline(_fitted_pat.baseline)
+            else:
+                # Read from state (already updated by sliders)
+                _amps = get_gaussian_amplitudes()
+                _centers = get_gaussian_centers()
+                _widths = get_gaussian_widths()
+                _baseline = get_gaussian_baseline()
+
+                # Ensure state has enough values (pad with defaults if needed)
+                while len(_amps) < _n_components:
+                    _amps = list(_amps) + [0.2]
+                    _centers = list(_centers) + [12.0]
+                    _widths = list(_widths) + [2.0]
+
+                _components = [
+                    pattern_fill.GaussianComponent(
+                        amplitude=_amps[i],
+                        center=_centers[i],
+                        width=_widths[i],
+                    )
+                    for i in range(_n_components)
+                ]
+                fitted_patterns["all days"] = pattern_fill.DailyPattern(
+                    gaussian_components=_components,
+                    baseline=_baseline,
+                    name="manual_gaussian",
+                    day_type="all",
+                )
+        else:  # weekdays + weekends
+            _wd_mask = series.index.dayofweek < 5
+            if _is_fit_mode:
+                # Fit both patterns
+                fitted_patterns["weekday"] = pattern_fill.fit_gaussian_pattern(
+                    series[_wd_mask],
+                    n_components=_n_components,
+                    day_type="weekday",
+                )
+                fitted_patterns["weekend"] = pattern_fill.fit_gaussian_pattern(
+                    series[~_wd_mask],
+                    n_components=_n_components,
+                    day_type="weekend",
+                )
+
+                # Extract and update state for weekday
+                _wd_pat = fitted_patterns["weekday"]
+                set_gaussian_amplitudes([c.amplitude for c in _wd_pat.gaussian_components])
+                set_gaussian_centers([c.center for c in _wd_pat.gaussian_components])
+                set_gaussian_widths([c.width for c in _wd_pat.gaussian_components])
+                set_gaussian_baseline(_wd_pat.baseline)
+
+                # Extract and update state for weekend
+                _we_pat = fitted_patterns["weekend"]
+                set_weekend_gaussian_amplitudes([c.amplitude for c in _we_pat.gaussian_components])
+                set_weekend_gaussian_centers([c.center for c in _we_pat.gaussian_components])
+                set_weekend_gaussian_widths([c.width for c in _we_pat.gaussian_components])
+                set_weekend_gaussian_baseline(_we_pat.baseline)
+            else:
+                # Read from state for weekday
+                _amps = get_gaussian_amplitudes()
+                _centers = get_gaussian_centers()
+                _widths = get_gaussian_widths()
+                _baseline = get_gaussian_baseline()
+
+                # Ensure state has enough values (pad with defaults if needed)
+                while len(_amps) < _n_components:
+                    _amps = list(_amps) + [0.2]
+                    _centers = list(_centers) + [12.0]
+                    _widths = list(_widths) + [2.0]
+
+                _components = [
+                    pattern_fill.GaussianComponent(
+                        amplitude=_amps[i],
+                        center=_centers[i],
+                        width=_widths[i],
+                    )
+                    for i in range(_n_components)
+                ]
+                fitted_patterns["weekday"] = pattern_fill.DailyPattern(
+                    gaussian_components=_components,
+                    baseline=_baseline,
+                    name="manual_gaussian_weekday",
+                    day_type="weekday",
+                )
+
+                # Read from state for weekend
+                _weekend_amps = get_weekend_gaussian_amplitudes()
+                _weekend_centers = get_weekend_gaussian_centers()
+                _weekend_widths = get_weekend_gaussian_widths()
+                _weekend_baseline = get_weekend_gaussian_baseline()
+
+                # Ensure state has enough values (pad with defaults if needed)
+                while len(_weekend_amps) < _n_components:
+                    _weekend_amps = list(_weekend_amps) + [0.2]
+                    _weekend_centers = list(_weekend_centers) + [12.0]
+                    _weekend_widths = list(_weekend_widths) + [2.0]
+
+                _weekend_components = [
+                    pattern_fill.GaussianComponent(
+                        amplitude=_weekend_amps[i],
+                        center=_weekend_centers[i],
+                        width=_weekend_widths[i],
+                    )
+                    for i in range(_n_components)
+                ]
+                fitted_patterns["weekend"] = pattern_fill.DailyPattern(
+                    gaussian_components=_weekend_components,
+                    baseline=_weekend_baseline,
+                    name="manual_gaussian_weekend",
                     day_type="weekend",
                 )
     return (fitted_patterns,)
@@ -1682,6 +2187,168 @@ def _(
 
 
 @app.cell
+def _(
+    day_type_radio,
+    fitted_patterns,
+    mo,
+    n_components_slider,
+    np,
+    pattern_mode,
+    plt,
+    profiles,
+    set_committed_patterns,
+    set_editor_patterns,
+):
+    """Display Gaussian patterns with Apply button.
+
+    Charts update automatically when sliders change (marimo reactivity).
+    Apply button commits patterns to both committed and editor states.
+    """
+    mo.stop(pattern_mode.value != "Gaussian" or n_components_slider is None)
+
+    def _render_gaussian_chart(stats_df, pattern, title_suffix=""):
+        """Render matplotlib chart with Gaussian pattern."""
+        fig, ax = plt.subplots(figsize=(6, 3))
+
+        # Generate pattern curve
+        _h = np.linspace(0, 24, 200)
+        _values = pattern.evaluate(_h)
+
+        # Plot pattern
+        ax.plot(_h, _values, "-", color="coral", linewidth=2.5, label="Pattern")
+
+        # Add data silhouette if available
+        if stats_df is not None and not stats_df.empty:
+            _mean = stats_df["mean"]
+            _std = stats_df["std"].fillna(0)
+            _pmin, _pmax = _mean.min(), _mean.max()
+            _range = _pmax - _pmin
+
+            if _range > 0:
+                _norm = lambda v: (v - _pmin) / _range
+            else:
+                _norm = lambda v: np.full_like(v, 0.5)
+
+            # Plot silhouette
+            _hours = stats_df.index.values
+            _mean_norm = _norm(_mean.values)
+            _std_lower = _norm((_mean - 2 * _std).values)
+            _std_upper = _norm((_mean + 2 * _std).values)
+
+            ax.fill_between(
+                _hours,
+                _std_lower,
+                _std_upper,
+                color="lightgray",
+                alpha=0.6,
+                label="±2 std dev",
+            )
+            ax.plot(
+                _hours,
+                _mean_norm,
+                "-",
+                color="gray",
+                linewidth=2,
+                alpha=0.7,
+                label="Mean profile",
+            )
+
+        # Add individual components if multiple
+        if pattern.mode == "gaussian" and len(pattern.gaussian_components) > 1:
+            for i, comp in enumerate(pattern.gaussian_components):
+                _comp_vals = pattern.baseline + comp.evaluate(_h)
+                ax.plot(
+                    _h,
+                    np.clip(_comp_vals, 0, 1),
+                    "--",
+                    color="gray",
+                    linewidth=1.5,
+                    alpha=0.4,
+                    label=f"Gaussian {i + 1}",
+                )
+
+        ax.set_xlabel("Hour of day")
+        ax.set_ylabel("Normalized value (0–1)")
+        ax.set_xlim(0, 24)
+        ax.set_ylim(-0.1, 1.1)
+        ax.legend(loc="upper right", fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_title(
+            f"Gaussian Pattern ({n_components_slider.value} components){title_suffix}"
+        )
+
+        return fig
+
+    def _apply_gaussian_patterns(_):
+        """Commit current Gaussian patterns to state."""
+        _patterns = {}
+        if day_type_radio.value == "all days":
+            _patterns["all days"] = fitted_patterns.get("all days")
+        else:
+            _patterns["weekday"] = fitted_patterns.get("weekday")
+            _patterns["weekend"] = fitted_patterns.get("weekend")
+        set_committed_patterns(_patterns)
+        # Also update editor state so if user toggles autofit again, they start from here
+        set_editor_patterns(_patterns)
+
+    _apply_button = mo.ui.button(
+        label="✅ Apply Pattern",
+        on_click=_apply_gaussian_patterns,
+    )
+
+    # Render and display charts
+    if day_type_radio.value == "all days":
+        _pat = fitted_patterns.get("all days")
+        _prof = profiles.get("all days")
+        if _pat:
+            _fig = _render_gaussian_chart(_prof, _pat)
+            _out = mo.vstack(
+                [
+                    mo.md("""
+                ### 📈 Gaussian Pattern Preview
+
+                The chart shows your Gaussian pattern (coral) overlaid on
+                the data profile (gray). Individual components shown as dashed lines.
+                **Adjust the sliders above** to modify the pattern in real-time,
+                then click **Apply Pattern** to use it for gap filling.
+                """),
+                    _fig,
+                    _apply_button,
+                ]
+            )
+        else:
+            _out = mo.callout(mo.md("No Gaussian pattern available."), kind="warn")
+    else:  # weekdays + weekends
+        _figs = []
+        for _dt_key, _label in [("weekday", "Weekday"), ("weekend", "Weekend")]:
+            _pat = fitted_patterns.get(_dt_key)
+            _prof = profiles.get(_dt_key)
+            if _pat:
+                _fig = _render_gaussian_chart(_prof, _pat, f" – {_label}")
+                _figs.append(_fig)
+
+        if _figs:
+            _out = mo.vstack(
+                [
+                    mo.md("""
+                ### 📈 Gaussian Pattern Preview
+
+                Charts show your Gaussian patterns overlaid on data profiles.
+                **Adjust sliders above** to modify patterns in real-time,
+                then click **Apply** to use them for gap filling.
+                """),
+                    mo.hstack(_figs, gap=1),
+                    _apply_button,
+                ]
+            )
+        else:
+            _out = mo.callout(mo.md("No Gaussian patterns available."), kind="warn")
+
+    _out
+    return
+
+
+@app.cell
 def _(get_committed_patterns, mo):
     """Read committed patterns from mo.state.
 
@@ -1855,7 +2522,6 @@ def _(
 
     _out
     return
-
 
 
 @app.cell
