@@ -1,6 +1,7 @@
-from pattern_fill.pattern import DailyPattern, SineComponent
+from pattern_fill.pattern import DailyPattern, SineComponent, GaussianComponent
 from pattern_fill.fitting import extract_daily_profile, fit_pattern
 from pattern_fill.sine_fitting import fit_sine_pattern
+from pattern_fill.gaussian_fitting import fit_gaussian_pattern
 from pattern_fill.gap_fill import pattern_fill, pattern_fill_dataset
 from pattern_fill.stochastic import (
     add_ar_noise,
@@ -19,9 +20,11 @@ __license__ = "MIT"
 __all__ = [
     "DailyPattern",
     "SineComponent",
+    "GaussianComponent",
     "extract_daily_profile",
     "fit_pattern",
     "fit_sine_pattern",
+    "fit_gaussian_pattern",
     "pattern_fill",
     "pattern_fill_dataset",
     "fit_ar_model",
