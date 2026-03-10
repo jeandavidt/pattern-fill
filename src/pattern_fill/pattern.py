@@ -70,6 +70,50 @@ class SineComponent:
 
 
 @dataclass
+class GaussianComponent:
+    """A single wrapped Gaussian component for building daily patterns.
+
+    Parameters
+    ----------
+    amplitude : float
+        Peak height above baseline (>= 0)
+    center : float
+        Hour of peak, normalized to [0, 24)
+    width : float
+        Standard deviation in hours (> 0)
+    """
+
+    amplitude: float
+    center: float
+    width: float
+
+    def __post_init__(self):
+        if self.amplitude < 0:
+            raise ValueError("amplitude must be non-negative")
+        if self.width <= 0:
+            raise ValueError("width must be positive")
+        self.center = self.center % 24.0
+
+    def evaluate(self, hours: np.ndarray) -> np.ndarray:
+        """Evaluate this wrapped Gaussian at given hours.
+
+        Uses three shifted copies (k = -1, 0, 1) to ensure periodicity at 0/24.
+        """
+        hours = np.asarray(hours, dtype=float)
+        result = np.zeros_like(hours)
+        for k in (-1, 0, 1):
+            result += np.exp(-0.5 * ((hours - self.center - 24.0 * k) / self.width) ** 2)
+        return self.amplitude * result
+
+    def to_dict(self) -> dict:
+        return {"amplitude": self.amplitude, "center": self.center, "width": self.width}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> GaussianComponent:
+        return cls(amplitude=d["amplitude"], center=d["center"], width=d["width"])
+
+
+@dataclass
 class DailyPattern:
     """A periodic 24-hour curve defined by spline control points or sine waves.
 
@@ -114,43 +158,49 @@ class DailyPattern:
     hours: list[float] | None = None
     values: list[float] | None = None
 
-    # Sine mode parameters (new)
+    # Sine mode parameters
     sine_components: list[SineComponent] | None = None
-    baseline: float = 0.5  # Baseline offset for sine waves (0-1 range)
+    baseline: float = 0.5  # Baseline offset for sine/gaussian waves (0-1 range)
+
+    # Gaussian mode parameters
+    gaussian_components: list[GaussianComponent] | None = None
 
     # Common parameters
     name: str = "pattern"
     periodic: bool = True
     day_type: str = "all"  # "all", "weekday", or "weekend"
 
-    # Mode tracking (new)
-    mode: str = field(init=False, repr=True)  # "spline" or "sine"
+    # Mode tracking
+    mode: str = field(init=False, repr=True)  # "spline", "sine", or "gaussian"
     _spline: CubicSpline | None = field(init=False, repr=False, compare=False, default=None)
 
     def __post_init__(self) -> None:
         # Determine mode
         has_spline_params = self.hours is not None and self.values is not None
         has_sine_params = self.sine_components is not None
+        has_gaussian_params = self.gaussian_components is not None
 
-        if has_spline_params and has_sine_params:
+        n_modes = sum([has_spline_params, has_sine_params, has_gaussian_params])
+        if n_modes > 1:
             raise ValueError(
-                "Cannot specify both spline parameters (hours/values) "
-                "and sine_components. Use one mode only."
+                "Cannot specify parameters from more than one mode. Use one mode only."
             )
-
-        if not has_spline_params and not has_sine_params:
+        if n_modes == 0:
             raise ValueError(
-                "Must specify either spline parameters (hours/values) "
-                "or sine_components"
+                "Must specify spline parameters (hours/values), sine_components, "
+                "or gaussian_components"
             )
 
         if has_spline_params:
             self.mode = "spline"
             self._validate_spline_params()
             self._build_spline()
-        else:
+        elif has_sine_params:
             self.mode = "sine"
             self._validate_sine_params()
+        else:
+            self.mode = "gaussian"
+            self._validate_gaussian_params()
 
         if self.day_type not in ("all", "weekday", "weekend"):
             raise ValueError(
@@ -169,6 +219,12 @@ class DailyPattern:
     def _validate_sine_params(self) -> None:
         if not self.sine_components:
             raise ValueError("sine_components cannot be empty")
+        if not (0.0 <= self.baseline <= 1.0):
+            raise ValueError(f"baseline must be in [0,1], got {self.baseline}")
+
+    def _validate_gaussian_params(self) -> None:
+        if not self.gaussian_components:
+            raise ValueError("gaussian_components cannot be empty")
         if not (0.0 <= self.baseline <= 1.0):
             raise ValueError(f"baseline must be in [0,1], got {self.baseline}")
 
@@ -194,10 +250,13 @@ class DailyPattern:
 
         if self.mode == "spline":
             result = self._spline(hours % 24.0)
-        else:  # sine mode
-            # Start with baseline, then add all sine components
+        elif self.mode == "sine":
             result = np.full_like(hours, self.baseline, dtype=float)
             for component in self.sine_components:
+                result += component.evaluate(hours % 24.0)
+        else:  # gaussian mode
+            result = np.full_like(hours, self.baseline, dtype=float)
+            for component in self.gaussian_components:
                 result += component.evaluate(hours % 24.0)
 
         # Clip to [0, 1] range (prevents spline overshoot and sine sum overflow)
@@ -225,9 +284,14 @@ class DailyPattern:
                 "hours": list(self.hours),
                 "values": list(self.values),
             })
-        else:  # sine mode
+        elif self.mode == "sine":
             base.update({
                 "sine_components": [c.to_dict() for c in self.sine_components],
+                "baseline": self.baseline,
+            })
+        else:  # gaussian mode
+            base.update({
+                "gaussian_components": [c.to_dict() for c in self.gaussian_components],
                 "baseline": self.baseline,
             })
 
@@ -246,13 +310,20 @@ class DailyPattern:
                 periodic=d.get("periodic", True),
                 day_type=d.get("day_type", "all"),
             )
-        else:  # sine mode
-            components = [
-                SineComponent.from_dict(c) for c in d["sine_components"]
-            ]
+        elif mode == "sine":
+            components = [SineComponent.from_dict(c) for c in d["sine_components"]]
             return cls(
                 sine_components=components,
                 baseline=d.get("baseline", 0.5),
+                name=d.get("name", "pattern"),
+                periodic=d.get("periodic", True),
+                day_type=d.get("day_type", "all"),
+            )
+        else:  # gaussian mode
+            components = [GaussianComponent.from_dict(c) for c in d["gaussian_components"]]
+            return cls(
+                gaussian_components=components,
+                baseline=d.get("baseline", 0.0),
                 name=d.get("name", "pattern"),
                 periodic=d.get("periodic", True),
                 day_type=d.get("day_type", "all"),
@@ -266,6 +337,39 @@ class DailyPattern:
         return cls.from_dict(json.loads(s))
 
     # -- factory methods for sine mode --
+
+    @classmethod
+    def from_gaussians(
+        cls,
+        components: list[tuple[float, float, float]] | list[GaussianComponent],
+        baseline: float = 0.0,
+        name: str = "gaussian_pattern",
+        day_type: str = "all",
+    ) -> DailyPattern:
+        """Create a DailyPattern from wrapped Gaussian components.
+
+        Parameters
+        ----------
+        components : list of tuples or GaussianComponent objects
+            If tuples: each is (amplitude, center, width)
+            If GaussianComponent objects: used directly
+        baseline : float
+            Floor offset (0-1 range)
+        name : str
+            Pattern name
+        day_type : str
+            "all", "weekday", or "weekend"
+        """
+        gauss_comps = [
+            c if isinstance(c, GaussianComponent) else GaussianComponent(*c)
+            for c in components
+        ]
+        return cls(
+            gaussian_components=gauss_comps,
+            baseline=baseline,
+            name=name,
+            day_type=day_type,
+        )
 
     @classmethod
     def from_sine_waves(
