@@ -1,16 +1,14 @@
 # /// script
 # requires-python = ">=3.10"
 # dependencies = [
-#     "altair",
-#     "anthropic==0.79.0",
+#     "altair>=5.0.0,<6.0.0",
 #     "marimo>=0.19.11",
 #     "matplotlib",
 #     "meteaudata==0.11.0",
 #     "numpy==2.2.6",
 #     "pandas==2.3.3",
 #     "pattern-fill",
-#     "pydantic-ai-slim==1.60.0",
-#     "wigglystuff==0.2.24",
+#     "wigglystuff>=0.2.21",
 # ]
 # ///
 
