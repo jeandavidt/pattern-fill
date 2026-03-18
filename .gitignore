@@ -12,3 +12,6 @@ wheels/
 # Build artifacts
 _site/
 .marimo_outputs/
+
+# uv lock file (not committed — reproducibility handled by pyproject.toml constraints)
+uv.lock
