@@ -1,20 +1,20 @@
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.11"
 # dependencies = [
-#     "altair>=5.0.0,<6.0.0",
+#     "altair",
 #     "marimo>=0.19.11",
 #     "matplotlib",
-#     "meteaudata==0.11.0",
-#     "numpy==2.2.6",
-#     "pandas==2.3.3",
+#     "meteaudata==0.12.1",
+#     "numpy==2.4.3",
+#     "pandas==3.0.1",
 #     "pattern-fill",
-#     "wigglystuff>=0.2.21",
+#     "wigglystuff>=0.2.21,<0.2.39",
 # ]
 # ///
 
 import marimo
 
-__generated_with = "0.18.0"
+__generated_with = "0.19.11"
 app = marimo.App(width="full")
 
 
@@ -29,7 +29,7 @@ async def _():
 
         # Install dependencies from PyPI
         print("📦 Installing dependencies from PyPI...")
-        await micropip.install("wigglystuff>=0.2.21")
+        await micropip.install("wigglystuff>=0.2.21,<0.2.39")
         # Pin altair to 5.x - altair 6.0.0 requires typing-extensions>=4.12.0 which conflicts with Pyodide's 4.11.0
         await micropip.install("altair>=5.0.0,<6.0.0")
         # Note: pydantic is included in Pyodide as a built-in package (v2.12.5)
@@ -56,6 +56,7 @@ def _():
     import shutil
     import base64
     from meteaudata import Signal, Dataset, TimeSeries
+
     return (
         ChartPuck,
         Dataset,
@@ -122,6 +123,7 @@ def _(np, pd):
         series.iloc[500:524] = np.nan   # gap near the transition
         series.iloc[900:1000] = np.nan  # gap in the quiet second week
         return series.to_frame()
+
     return (generate_demo_data,)
 
 
