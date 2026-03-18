@@ -32,3 +32,6 @@ packages = ["src/pattern_fill"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = [
+    "network: tests that make real network calls (deselect with -m 'not network')",
+]
