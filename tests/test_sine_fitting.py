@@ -99,8 +99,9 @@ class TestFitSinePattern:
         p = fit_sine_pattern(s, frequencies=[1.0])
 
         assert len(p.sine_components) >= 1
+        # Frequency is now a free optimisation parameter; check it stays close to the init
         freqs = [c.frequency for c in p.sine_components]
-        assert 1.0 in freqs
+        assert any(abs(f - 1.0) < 0.1 for f in freqs)
 
     def test_auto_detect_frequencies(self):
         s = _make_sine_series(amplitude=0.3, frequency=1.0, noise_level=0.02)
@@ -140,7 +141,8 @@ class TestLeastSquaresFitting:
 
         assert len(p.sine_components) >= 1
         comp = p.sine_components[0]
-        assert comp.frequency == 1.0
+        # Frequency is a free parameter; it should stay close to the initial guess
+        assert abs(comp.frequency - 1.0) < 0.1
         assert 0 <= comp.amplitude <= 1.0
         assert 0 <= comp.phase < 24.0
 
@@ -150,7 +152,7 @@ class TestLeastSquaresFitting:
 
         assert len(p.sine_components) >= 1
         freqs = [c.frequency for c in p.sine_components]
-        assert 1.0 in freqs
+        assert any(abs(f - 1.0) < 0.1 for f in freqs)
 
     def test_least_squares_with_auto_detect(self):
         s = _make_sine_series(amplitude=0.3, frequency=1.0, noise_level=0.02)
