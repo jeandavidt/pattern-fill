@@ -14,7 +14,7 @@
 
 import marimo
 
-__generated_with = "0.19.11"
+__generated_with = "0.21.1"
 app = marimo.App(width="full")
 
 
@@ -144,17 +144,53 @@ def _(mo):
         kind="area",
         label="Upload a metEAUdata zip file (Signal or Dataset)",
     )
+    csv_sep = mo.ui.dropdown(
+        options={"Comma  ,": ",", "Semicolon  ;": ";", "Tab  ⇥": "\t"},
+        value="Comma  ,",
+        label="CSV separator",
+    )
     data_source
-    return data_source, file_upload, meteaudata_upload
+    return csv_sep, data_source, file_upload, meteaudata_upload
 
 
 @app.cell
-def _(data_source, file_upload, meteaudata_upload, mo):
+def _(csv_sep, data_source, file_upload, meteaudata_upload, mo):
     mo.stop(data_source.value == "demo")
     _upload_widget = (
         file_upload if data_source.value == "upload_csv" else meteaudata_upload
     )
-    _upload_widget
+    if data_source.value == "upload_csv":
+        _hint = mo.callout(
+            mo.md("""
+    **Expected format — CSV / Excel / Parquet**
+
+    Your file needs at least two columns:
+
+    | Column | Content |
+    |--------|---------|
+    | **datetime** | Timestamps — any format pandas understands, e.g. `2024-01-08 00:15:00`. Can also be the row index. |
+    | **value** | A numeric sensor signal, ideally at a regular interval (15 min recommended). |
+
+    After uploading you'll pick which column is the datetime and which is the value.
+    Gaps (missing values) can be left as empty cells or `NaN` — that's what the tool fills.
+
+    > **Tip:** download `test_upload.csv` from the repo `notebooks/` folder for a ready-to-use example.
+    """),
+            kind="info",
+        )
+        _out = mo.vstack([_upload_widget, csv_sep, _hint], gap=1)
+    else:
+        _hint = mo.callout(
+            mo.md("""
+    **Expected format — metEAUdata ZIP**
+
+    Upload a `.zip` exported from a metEAUdata `Signal.save()` or `Dataset.save()` call.
+    The tool will preserve all processing history and let you download the filled dataset in the same format.
+    """),
+            kind="info",
+        )
+        _out = mo.vstack([_upload_widget, _hint], gap=1)
+    _out
     return
 
 
@@ -162,6 +198,7 @@ def _(data_source, file_upload, meteaudata_upload, mo):
 def _(
     Dataset,
     Signal,
+    csv_sep,
     data_source,
     file_upload,
     generate_demo_data,
@@ -173,8 +210,6 @@ def _(
     tempfile,
     zipfile,
 ):
-    _debug_msg = f"data_source.value = {repr(data_source.value)}"
-
     original_signal = None
     original_dataset = None
 
@@ -190,17 +225,12 @@ def _(
             df = pd.DataFrame()
             import_type = None
     elif data_source.value == "upload_csv":
-        mo.stop(
-            not file_upload.value,
-            mo.callout(
-                mo.md(f"Upload a file to continue. ({_debug_msg})"), kind="warn"
-            ),
-        )
+        mo.stop(not file_upload.value)
         _uploaded = file_upload.value[0]
         _name = _uploaded.name.lower()
         _buf = io.BytesIO(_uploaded.contents)
         if _name.endswith(".csv"):
-            df = pd.read_csv(_buf)
+            df = pd.read_csv(_buf, sep=csv_sep.value)
         elif _name.endswith(".parquet"):
             df = pd.read_parquet(_buf)
         elif _name.endswith((".xlsx", ".xls")):
@@ -213,13 +243,7 @@ def _(
             df = pd.DataFrame()
         import_type = "csv"
     else:
-        mo.stop(
-            not meteaudata_upload.value,
-            mo.callout(
-                mo.md(f"Upload a metEAUdata zip file to continue. ({_debug_msg})"),
-                kind="warn",
-            ),
-        )
+        mo.stop(not meteaudata_upload.value)
         _uploaded = meteaudata_upload.value[0]
         _name = _uploaded.name
         _buf = io.BytesIO(_uploaded.contents)
@@ -412,7 +436,7 @@ def _(alt, pd, series):
     _chart = (
         alt.Chart(_valid_df)
         .mark_line(color="steelblue", strokeWidth=0.8)
-        .encode(x=alt.X("time:T", title="Time"), y=alt.Y("value:Q", title=series.name))
+        .encode(x=alt.X("time:T", title="Time"), y=alt.Y("value:Q", title=series.name, scale=alt.Scale(zero=False)))
     )
 
     # Add gap regions as highlighted rectangles
@@ -426,7 +450,7 @@ def _(alt, pd, series):
         _chart = _chart + _gap_chart
 
     _chart = _chart.properties(
-        title="Raw series (red = gaps)", height=100
+        title="Raw series (red = gaps)", height=100, width="container"
     ).configure_axis(labelFontSize=10, titleFontSize=11)
 
     _chart
@@ -467,6 +491,13 @@ def _(mo, pattern_mode):
     normalize_checkbox = mo.ui.checkbox(
         label="Normalize data",
         value=True,
+    )
+
+    # Aggregation method for daily profile extraction
+    aggregation_radio = mo.ui.radio(
+        options=["median", "mean"],
+        value="median",
+        label="Aggregation",
     )
 
     # Blend minutes slider - controls the tapering window size
@@ -544,6 +575,7 @@ def _(mo, pattern_mode):
                 day_type_radio,
                 fit_checkbox,
                 normalize_checkbox,
+                aggregation_radio,
                 blend_minutes_slider,
                 pattern_window_days_slider,
                 add_noise_checkbox,
@@ -571,6 +603,7 @@ def _(mo, pattern_mode):
                 day_type_radio,
                 fit_checkbox,
                 normalize_checkbox,
+                aggregation_radio,
                 blend_minutes_slider,
                 pattern_window_days_slider,
                 add_noise_checkbox,
@@ -598,6 +631,7 @@ def _(mo, pattern_mode):
                 day_type_radio,
                 fit_checkbox,
                 normalize_checkbox,
+                aggregation_radio,
                 blend_minutes_slider,
                 pattern_window_days_slider,
                 add_noise_checkbox,
@@ -614,6 +648,7 @@ def _(mo, pattern_mode):
     _out
     return (
         add_noise_checkbox,
+        aggregation_radio,
         ar_order_slider,
         ar_window_days_slider,
         blend_minutes_slider,
@@ -843,16 +878,15 @@ def _(
 
         return handler
 
-    # Weekday sliders
+    # Weekday number inputs
     sine_amplitude_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=1.0,
                 step=0.01,
                 value=_amp_vals[i],
                 label=f"Wave {i + 1} Amplitude",
-                show_value=True,
                 on_change=make_amplitude_handler(i),
             )
             for i in range(_n)
@@ -861,13 +895,12 @@ def _(
 
     sine_frequency_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.08333,
                 stop=12.0,
                 step=0.125,
                 value=_freq_vals[i],
                 label=f"Wave {i + 1} Frequency",
-                show_value=True,
                 on_change=make_frequency_handler(i),
             )
             for i in range(_n)
@@ -876,39 +909,36 @@ def _(
 
     sine_phase_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=24.0,
                 step=0.5,
                 value=_phase_vals[i],
                 label=f"Wave {i + 1} Phase (hour)",
-                show_value=True,
                 on_change=make_phase_handler(i),
             )
             for i in range(_n)
         ]
     )
 
-    sine_baseline_slider = mo.ui.slider(
+    sine_baseline_slider = mo.ui.number(
         start=0.0,
         stop=1.0,
         step=0.01,
         value=_baseline_val,
         label="Baseline",
-        show_value=True,
         on_change=set_sine_baseline,
     )
 
-    # Weekend sliders
+    # Weekend number inputs
     weekend_sine_amplitude_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
-                stop=0.5,
+                stop=1.0,
                 step=0.01,
                 value=_weekend_amp_vals[i],
                 label=f"Weekend Wave {i + 1} Amplitude",
-                show_value=True,
                 on_change=make_weekend_amplitude_handler(i),
             )
             for i in range(_n)
@@ -917,13 +947,12 @@ def _(
 
     weekend_sine_frequency_sliders = mo.ui.array(
         [
-            mo.ui.slider(
-                start=0.5,
-                stop=4.0,
-                step=0.5,
+            mo.ui.number(
+                start=0.08333,
+                stop=12.0,
+                step=0.125,
                 value=_weekend_freq_vals[i],
                 label=f"Weekend Wave {i + 1} Frequency",
-                show_value=True,
                 on_change=make_weekend_frequency_handler(i),
             )
             for i in range(_n)
@@ -932,26 +961,24 @@ def _(
 
     weekend_sine_phase_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=24.0,
                 step=0.5,
                 value=_weekend_phase_vals[i],
                 label=f"Weekend Wave {i + 1} Phase (hour)",
-                show_value=True,
                 on_change=make_weekend_phase_handler(i),
             )
             for i in range(_n)
         ]
     )
 
-    weekend_sine_baseline_slider = mo.ui.slider(
+    weekend_sine_baseline_slider = mo.ui.number(
         start=0.0,
         stop=1.0,
         step=0.01,
         value=_weekend_baseline_val,
         label="Weekend Baseline",
-        show_value=True,
         on_change=set_weekend_baseline,
     )
 
@@ -1124,16 +1151,15 @@ def _(
 
         return handler
 
-    # Weekday sliders
+    # Weekday number inputs
     _gaussian_amplitude_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=1.0,
                 step=0.01,
                 value=_amp_vals[_idx],
                 label=f"Gaussian {_idx + 1} Amplitude",
-                show_value=True,
                 on_change=_gaussian_make_amplitude_handler(_idx),
             )
             for _idx in range(_n)
@@ -1142,13 +1168,12 @@ def _(
 
     _gaussian_center_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=24.0,
                 step=0.5,
                 value=_center_vals[_idx],
                 label=f"Gaussian {_idx + 1} Center (hour)",
-                show_value=True,
                 on_change=_gaussian_make_center_handler(_idx),
             )
             for _idx in range(_n)
@@ -1157,39 +1182,36 @@ def _(
 
     _gaussian_width_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.5,
                 stop=6.0,
                 step=0.25,
                 value=_width_vals[_idx],
                 label=f"Gaussian {_idx + 1} Width (hours)",
-                show_value=True,
                 on_change=_gaussian_make_width_handler(_idx),
             )
             for _idx in range(_n)
         ]
     )
 
-    _gaussian_baseline_slider = mo.ui.slider(
+    _gaussian_baseline_slider = mo.ui.number(
         start=0.0,
         stop=1.0,
         step=0.01,
         value=_baseline_val,
         label="Baseline",
-        show_value=True,
         on_change=set_gaussian_baseline,
     )
 
-    # Weekend sliders
+    # Weekend number inputs
     _weekend_gaussian_amplitude_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=1.0,
                 step=0.01,
                 value=_weekend_amp_vals[_idx],
                 label=f"Weekend Gaussian {_idx + 1} Amplitude",
-                show_value=True,
                 on_change=_gaussian_make_weekend_amplitude_handler(_idx),
             )
             for _idx in range(_n)
@@ -1198,13 +1220,12 @@ def _(
 
     _weekend_gaussian_center_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.0,
                 stop=24.0,
                 step=0.5,
                 value=_weekend_center_vals[_idx],
                 label=f"Weekend Gaussian {_idx + 1} Center (hour)",
-                show_value=True,
                 on_change=_gaussian_make_weekend_center_handler(_idx),
             )
             for _idx in range(_n)
@@ -1213,26 +1234,24 @@ def _(
 
     _weekend_gaussian_width_sliders = mo.ui.array(
         [
-            mo.ui.slider(
+            mo.ui.number(
                 start=0.5,
                 stop=6.0,
                 step=0.25,
                 value=_weekend_width_vals[_idx],
                 label=f"Weekend Gaussian {_idx + 1} Width (hours)",
-                show_value=True,
                 on_change=_gaussian_make_weekend_width_handler(_idx),
             )
             for _idx in range(_n)
         ]
     )
 
-    _weekend_gaussian_baseline_slider = mo.ui.slider(
+    _weekend_gaussian_baseline_slider = mo.ui.number(
         start=0.0,
         stop=1.0,
         step=0.01,
         value=_weekend_baseline_val,
         label="Weekend Baseline",
-        show_value=True,
         on_change=set_weekend_gaussian_baseline,
     )
 
@@ -1292,8 +1311,8 @@ def _(
 
 
 @app.cell
-def _(day_type_radio, np, pd, series):
-    def get_profile_stats(s, resolution_minutes=15):
+def _(aggregation_radio, day_type_radio, np, pd, series):
+    def get_profile_stats(s, resolution_minutes=15, aggregation="median"):
         if s is None or not isinstance(s.index, pd.DatetimeIndex):
             return None
 
@@ -1312,7 +1331,10 @@ def _(day_type_radio, np, pd, series):
         _bin_idx = np.clip(_bin_idx, 0, len(_centers) - 1)
 
         _grouped = pd.Series(_s.values, index=_bin_idx).groupby(level=0)
-        _mean = _grouped.mean()
+        if aggregation == "median":
+            _mean = _grouped.median()
+        else:
+            _mean = _grouped.mean()
         _std = _grouped.std()
 
         _stats = pd.DataFrame({"mean": _mean, "std": _std})
@@ -1321,59 +1343,59 @@ def _(day_type_radio, np, pd, series):
         _stats.index.name = "hour"
         return _stats
 
+    _agg = aggregation_radio.value
     profiles = {}
     if day_type_radio.value == "all days":
-        _prof = get_profile_stats(series)
+        _prof = get_profile_stats(series, aggregation=_agg)
         profiles["all days"] = _prof
     else:  # weekdays + weekends
         _wd_mask = series.index.dayofweek < 5
-        profiles["weekday"] = get_profile_stats(series[_wd_mask])
-        profiles["weekend"] = get_profile_stats(series[~_wd_mask])
+        profiles["weekday"] = get_profile_stats(series[_wd_mask], aggregation=_agg)
+        profiles["weekend"] = get_profile_stats(series[~_wd_mask], aggregation=_agg)
     return (profiles,)
 
 
 @app.cell
-def _(day_type_radio, mo, np, pattern_mode, profiles):
-    """Pre-compute normalized silhouette data for spline charts."""
-    mo.stop(pattern_mode.value != "Spline")
+def _(day_type_radio, np, pattern_mode, profiles):
+    """Pre-compute normalized silhouette data for spline charts.
 
+    Always runs; silhouette_data is empty dict when not in Spline mode
+    so the spline pucks cell can always receive a valid value.
+    """
     silhouette_data = {}
 
-    def prepare_silhouette(stats_df):
-        """Convert stats to normalized coordinates for fast plotting."""
-        if stats_df is None or stats_df.empty:
-            return None
+    if pattern_mode.value == "Spline":
+        def prepare_silhouette(stats_df):
+            if stats_df is None or stats_df.empty:
+                return None
+            mean = stats_df["mean"].values
+            std = stats_df["std"].fillna(0).values
+            hours = stats_df.index.values
+            pmin, pmax = mean.min(), mean.max()
+            if pmax - pmin > 0:
+                norm_mean = (mean - pmin) / (pmax - pmin)
+                norm_std = std / (pmax - pmin)
+            else:
+                norm_mean = np.full_like(mean, 0.5)
+                norm_std = np.zeros_like(std)
+            return {
+                "hours": hours,
+                "mean": norm_mean,
+                "std_upper": np.clip(norm_mean + 2 * norm_std, 0, 1),
+                "std_lower": np.clip(norm_mean - 2 * norm_std, 0, 1),
+            }
 
-        mean = stats_df["mean"].values
-        std = stats_df["std"].fillna(0).values
-        hours = stats_df.index.values
-
-        # Normalize to 0-1 range
-        pmin, pmax = mean.min(), mean.max()
-        if pmax - pmin > 0:
-            norm_mean = (mean - pmin) / (pmax - pmin)
-            norm_std = std / (pmax - pmin)
+        if day_type_radio.value == "all days":
+            silhouette_data["all days"] = prepare_silhouette(profiles.get("all days"))
         else:
-            norm_mean = np.full_like(mean, 0.5)
-            norm_std = np.zeros_like(std)
-
-        return {
-            "hours": hours,
-            "mean": norm_mean,
-            "std_upper": np.clip(norm_mean + 2 * norm_std, 0, 1),
-            "std_lower": np.clip(norm_mean - 2 * norm_std, 0, 1),
-        }
-
-    if day_type_radio.value == "all days":
-        silhouette_data["all days"] = prepare_silhouette(profiles.get("all days"))
-    else:
-        silhouette_data["weekday"] = prepare_silhouette(profiles.get("weekday"))
-        silhouette_data["weekend"] = prepare_silhouette(profiles.get("weekend"))
+            silhouette_data["weekday"] = prepare_silhouette(profiles.get("weekday"))
+            silhouette_data["weekend"] = prepare_silhouette(profiles.get("weekend"))
     return (silhouette_data,)
 
 
 @app.cell
 def _(
+    aggregation_radio,
     day_type_radio,
     fit_checkbox,
     get_gaussian_amplitudes,
@@ -1429,6 +1451,7 @@ def _(
                     series,
                     n_control_points=_n_points,
                     day_type="all",
+                    aggregation=aggregation_radio.value,
                 )
             else:
                 # Initialize with uniform values when not fitting
@@ -1453,11 +1476,13 @@ def _(
                     series[_wd_mask],
                     n_control_points=_n_points,
                     day_type="weekday",
+                    aggregation=aggregation_radio.value,
                 )
                 fitted_patterns["weekend"] = pattern_fill.fit_pattern(
                     series[~_wd_mask],
                     n_control_points=_n_points,
                     day_type="weekend",
+                    aggregation=aggregation_radio.value,
                 )
             else:
                 # Initialize with uniform values when not fitting
@@ -1493,6 +1518,7 @@ def _(
                     series,
                     n_components=_n_components,
                     day_type="all",
+                    aggregation=aggregation_radio.value,
                 )
 
                 # Extract fitted parameters and update state
@@ -1540,11 +1566,13 @@ def _(
                     series[_wd_mask],
                     n_components=_n_components,
                     day_type="weekday",
+                    aggregation=aggregation_radio.value,
                 )
                 fitted_patterns["weekend"] = pattern_fill.fit_sine_pattern(
                     series[~_wd_mask],
                     n_components=_n_components,
                     day_type="weekend",
+                    aggregation=aggregation_radio.value,
                 )
 
                 # Extract and update state for weekday
@@ -1626,6 +1654,7 @@ def _(
                     series,
                     n_components=_n_components,
                     day_type="all",
+                    aggregation=aggregation_radio.value,
                 )
 
                 # Extract fitted parameters and update state
@@ -1673,11 +1702,13 @@ def _(
                     series[_wd_mask],
                     n_components=_n_components,
                     day_type="weekday",
+                    aggregation=aggregation_radio.value,
                 )
                 fitted_patterns["weekend"] = pattern_fill.fit_gaussian_pattern(
                     series[~_wd_mask],
                     n_components=_n_components,
                     day_type="weekend",
+                    aggregation=aggregation_radio.value,
                 )
 
                 # Extract and update state for weekday
@@ -1782,7 +1813,6 @@ def _(
     ChartPuck,
     day_type_radio,
     get_editor_patterns,
-    mo,
     n_points_slider,
     np,
     pattern_fill,
@@ -1791,97 +1821,76 @@ def _(
 ):
     """Create ChartPuck widgets with real-time spline updates.
 
-    Pucks are initialized from editor_patterns, which persists user edits
-    even when autofit is toggled off.
+    Always runs. puck_all/puck_weekday/puck_weekend are None when not in
+    Spline mode so the spline display cell and layout cell always receive
+    a defined value.
     """
-    mo.stop(pattern_mode.value != "Spline" or n_points_slider is None)
-
-    def make_draw_fn(silhouette, title_suffix="", dt_key="all"):
-        """Factory to create draw callback with silhouette in closure."""
-
-        def draw_chart(ax, widget):
-            """Called on init and every puck move - must be fast!"""
-            # Draw pre-computed silhouette (fast - just plotting cached data)
-            if silhouette is not None:
-                ax.fill_between(
-                    silhouette["hours"],
-                    silhouette["std_lower"],
-                    silhouette["std_upper"],
-                    color="lightgray",
-                    alpha=0.6,
-                    label="±2 std dev",
-                )
-                ax.plot(
-                    silhouette["hours"],
-                    silhouette["mean"],
-                    "-",
-                    color="gray",
-                    linewidth=2,
-                    alpha=0.7,
-                    label="Mean profile",
-                )
-
-            # Create pattern from current puck positions
-            if len(widget.x) >= 2:
-                pattern = pattern_fill.DailyPattern(
-                    hours=list(widget.x),
-                    values=list(widget.y),
-                    name=f"preview_{dt_key}",
-                    day_type=dt_key if dt_key in ["weekday", "weekend"] else "all",
-                )
-                # Draw spline curve (fast - 200 point evaluation)
-                h = np.linspace(0, 24, 200)
-                ax.plot(
-                    h,
-                    pattern.evaluate(h),
-                    "-",
-                    color="coral",
-                    linewidth=2.5,
-                    label="Spline",
-                    zorder=3,
-                )
-
-            # Styling
-            ax.set_xlabel("Hour of day")
-            ax.set_ylabel("Normalized value (0–1)")
-            ax.legend(loc="upper right", fontsize=8)
-            ax.grid(True, alpha=0.3)
-            ax.set_title(
-                f"Pattern Editor ({n_points_slider.value} pucks){title_suffix}"
-            )
-
-        return draw_chart
-
-    # Use editor_patterns (persisted state) instead of fitted_patterns
-    editor_patterns = get_editor_patterns()
-
     puck_all = None
     puck_weekday = None
     puck_weekend = None
 
-    if day_type_radio.value == "all days":
-        _pat = editor_patterns.get("all days")
-        _sil = silhouette_data.get("all days")
-        if _pat and len(_pat.hours) > 0:
-            puck_all = ChartPuck.from_callback(
-                draw_fn=make_draw_fn(_sil, "", "all"),
-                x_bounds=(0, 24),
-                y_bounds=(0, 1),
-                figsize=(4, 3),
-                x=list(_pat.hours),
-                y=list(_pat.values),
-                drag_x_bounds=(0, 24),
-                drag_y_bounds=(0, 1),
-                puck_radius=12,
-                puck_color="#e63946",
-            )
-    else:  # weekdays + weekends
-        for dt_key in ["weekday", "weekend"]:
-            _pat = editor_patterns.get(dt_key)
-            _sil = silhouette_data.get(dt_key)
+    if pattern_mode.value == "Spline" and n_points_slider is not None:
+
+        def make_draw_fn(silhouette, title_suffix="", dt_key="all"):
+            """Factory to create draw callback with silhouette in closure."""
+
+            def draw_chart(ax, widget):
+                """Called on init and every puck move - must be fast!"""
+                if silhouette is not None:
+                    ax.fill_between(
+                        silhouette["hours"],
+                        silhouette["std_lower"],
+                        silhouette["std_upper"],
+                        color="lightgray",
+                        alpha=0.6,
+                        label="±2 std dev",
+                    )
+                    ax.plot(
+                        silhouette["hours"],
+                        silhouette["mean"],
+                        "-",
+                        color="gray",
+                        linewidth=2,
+                        alpha=0.7,
+                        label="Mean profile",
+                    )
+
+                if len(widget.x) >= 2:
+                    pattern = pattern_fill.DailyPattern(
+                        hours=list(widget.x),
+                        values=list(widget.y),
+                        name=f"preview_{dt_key}",
+                        day_type=dt_key if dt_key in ["weekday", "weekend"] else "all",
+                    )
+                    h = np.linspace(0, 24, 200)
+                    ax.plot(
+                        h,
+                        pattern.evaluate(h),
+                        "-",
+                        color="coral",
+                        linewidth=2.5,
+                        label="Spline",
+                        zorder=3,
+                    )
+
+                ax.set_xlabel("Hour of day")
+                ax.set_ylabel("Normalized value (0–1)")
+                ax.legend(loc="upper right", fontsize=8)
+                ax.grid(True, alpha=0.3)
+                ax.set_title(
+                    f"Pattern Editor ({n_points_slider.value} pucks){title_suffix}"
+                )
+
+            return draw_chart
+
+        editor_patterns = get_editor_patterns()
+
+        if day_type_radio.value == "all days":
+            _pat = editor_patterns.get("all days")
+            _sil = silhouette_data.get("all days")
             if _pat and len(_pat.hours) > 0:
-                _puck = ChartPuck.from_callback(
-                    draw_fn=make_draw_fn(_sil, f" – {dt_key}", dt_key),
+                puck_all = ChartPuck.from_callback(
+                    draw_fn=make_draw_fn(_sil, "", "all"),
                     x_bounds=(0, 24),
                     y_bounds=(0, 1),
                     figsize=(4, 3),
@@ -1892,10 +1901,27 @@ def _(
                     puck_radius=12,
                     puck_color="#e63946",
                 )
-                if dt_key == "weekday":
-                    puck_weekday = _puck
-                else:
-                    puck_weekend = _puck
+        else:
+            for dt_key in ["weekday", "weekend"]:
+                _pat = editor_patterns.get(dt_key)
+                _sil = silhouette_data.get(dt_key)
+                if _pat and len(_pat.hours) > 0:
+                    _puck = ChartPuck.from_callback(
+                        draw_fn=make_draw_fn(_sil, f" – {dt_key}", dt_key),
+                        x_bounds=(0, 24),
+                        y_bounds=(0, 1),
+                        figsize=(4, 3),
+                        x=list(_pat.hours),
+                        y=list(_pat.values),
+                        drag_x_bounds=(0, 24),
+                        drag_y_bounds=(0, 1),
+                        puck_radius=12,
+                        puck_color="#e63946",
+                    )
+                    if dt_key == "weekday":
+                        puck_weekday = _puck
+                    else:
+                        puck_weekend = _puck
     return puck_all, puck_weekday, puck_weekend
 
 
@@ -2020,8 +2046,8 @@ def _(
     else:
         _out = mo.callout(mo.md("Unknown mode selected."), kind="warn")
 
-    _out
-    return
+    spline_editor_ui = _out
+    return (spline_editor_ui,)
 
 
 @app.cell
@@ -2034,156 +2060,72 @@ def _(
     pattern_mode,
     plt,
     profiles,
-    set_committed_patterns,
-    set_editor_patterns,
 ):
-    """Display sine wave patterns with Apply button.
+    """Sine wave pattern preview — reactive, no Apply button needed.
 
-    Charts update automatically when sliders change (marimo reactivity).
-    Apply button commits patterns to both committed and editor states.
+    Updates automatically when number inputs change (marimo reactivity).
+    Returns sine_preview_ui for the side-by-side layout cell.
     """
-    mo.stop(pattern_mode.value != "Sine Waves" or n_components_slider is None)
+    sine_preview_ui = None  # safe default — always defined
 
-    def _render_sine_chart(stats_df, pattern, title_suffix=""):
-        """Render matplotlib chart with sine wave pattern."""
-        fig, ax = plt.subplots(figsize=(6, 3))
+    if pattern_mode.value == "Sine Waves" and n_components_slider is not None:
 
-        # Generate pattern curve
-        _h = np.linspace(0, 24, 200)
-        _values = pattern.evaluate(_h)
+        def _render_sine_chart(stats_df, pattern, title_suffix=""):
+            fig, ax = plt.subplots(figsize=(6, 3))
 
-        # Plot pattern
-        ax.plot(_h, _values, "-", color="coral", linewidth=2.5, label="Pattern")
+            _h = np.linspace(0, 24, 200)
+            _values = pattern.evaluate(_h)
+            ax.plot(_h, _values, "-", color="coral", linewidth=2.5, label="Pattern")
 
-        # Add data silhouette if available
-        if stats_df is not None and not stats_df.empty:
-            _mean = stats_df["mean"]
-            _std = stats_df["std"].fillna(0)
-            _pmin, _pmax = _mean.min(), _mean.max()
-            _range = _pmax - _pmin
+            if stats_df is not None and not stats_df.empty:
+                _mean = stats_df["mean"]
+                _std = stats_df["std"].fillna(0)
+                _pmin, _pmax = _mean.min(), _mean.max()
+                _range = _pmax - _pmin
+                _norm = (lambda v: (v - _pmin) / _range) if _range > 0 else (lambda v: np.full_like(v, 0.5))
+                _hours = stats_df.index.values
+                ax.fill_between(_hours, _norm((_mean - 2 * _std).values), _norm((_mean + 2 * _std).values), color="lightgray", alpha=0.6, label="±2 std dev")
+                ax.plot(_hours, _norm(_mean.values), "-", color="gray", linewidth=2, alpha=0.7, label="Mean profile")
 
-            if _range > 0:
-                _norm = lambda v: (v - _pmin) / _range
-            else:
-                _norm = lambda v: np.full_like(v, 0.5)
+            _COLORS = ["#e63946", "#457b9d", "#2a9d8f", "#e9c46a", "#f4a261"]
+            if pattern.mode == "sine":
+                for i, comp in enumerate(pattern.sine_components):
+                    _comp_vals = pattern.baseline + comp.evaluate(_h)
+                    ax.plot(_h, np.clip(_comp_vals, 0, 1), "--", color=_COLORS[i % len(_COLORS)], linewidth=1.5, alpha=0.7, label=f"Wave {i + 1}")
 
-            # Plot silhouette
-            _hours = stats_df.index.values
-            _mean_norm = _norm(_mean.values)
-            _std_lower = _norm((_mean - 2 * _std).values)
-            _std_upper = _norm((_mean + 2 * _std).values)
+            ax.set_xlabel("Hour of day")
+            ax.set_ylabel("Normalized value (0–1)")
+            ax.set_xlim(0, 24)
+            ax.set_ylim(-0.1, 1.1)
+            ax.legend(loc="upper right", fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.set_title(f"Sine Pattern ({n_components_slider.value} components){title_suffix}")
+            return fig
 
-            ax.fill_between(
-                _hours,
-                _std_lower,
-                _std_upper,
-                color="lightgray",
-                alpha=0.6,
-                label="±2 std dev",
-            )
-            ax.plot(
-                _hours,
-                _mean_norm,
-                "-",
-                color="gray",
-                linewidth=2,
-                alpha=0.7,
-                label="Mean profile",
-            )
-
-        # Add individual components if multiple
-        if pattern.mode == "sine" and len(pattern.sine_components) > 1:
-            for i, comp in enumerate(pattern.sine_components):
-                _comp_vals = pattern.baseline + comp.evaluate(_h)
-                ax.plot(
-                    _h,
-                    np.clip(_comp_vals, 0, 1),
-                    "--",
-                    color="gray",
-                    linewidth=1.5,
-                    alpha=0.4,
-                    label=f"Wave {i + 1}",
-                )
-
-        ax.set_xlabel("Hour of day")
-        ax.set_ylabel("Normalized value (0–1)")
-        ax.set_xlim(0, 24)
-        ax.set_ylim(-0.1, 1.1)
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.set_title(
-            f"Sine Pattern ({n_components_slider.value} components){title_suffix}"
-        )
-
-        return fig
-
-    def _apply_sine_patterns(_):
-        """Commit current sine patterns to state."""
-        _patterns = {}
         if day_type_radio.value == "all days":
-            _patterns["all days"] = fitted_patterns.get("all days")
-        else:
-            _patterns["weekday"] = fitted_patterns.get("weekday")
-            _patterns["weekend"] = fitted_patterns.get("weekend")
-        set_committed_patterns(_patterns)
-        # Also update editor state so if user toggles autofit again, they start from here
-        set_editor_patterns(_patterns)
-
-    _apply_button = mo.ui.button(
-        label="✅ Apply Pattern",
-        on_click=_apply_sine_patterns,
-    )
-
-    # Render and display charts
-    if day_type_radio.value == "all days":
-        _pat = fitted_patterns.get("all days")
-        _prof = profiles.get("all days")
-        if _pat:
-            _fig = _render_sine_chart(_prof, _pat)
-            _out = mo.vstack(
-                [
-                    mo.md("""
-                ### 🌊 Sine Wave Pattern Preview
-
-                The chart shows your sine wave pattern (coral) overlaid on
-                the data profile (gray). Individual components shown as dashed lines.
-                **Adjust the sliders above** to modify the pattern in real-time,
-                then click **Apply Pattern** to use it for gap filling.
-                """),
-                    _fig,
-                    _apply_button,
-                ]
-            )
-        else:
-            _out = mo.callout(mo.md("No sine pattern available."), kind="warn")
-    else:  # weekdays + weekends
-        _figs = []
-        for _dt_key, _label in [("weekday", "Weekday"), ("weekend", "Weekend")]:
-            _pat = fitted_patterns.get(_dt_key)
-            _prof = profiles.get(_dt_key)
+            _pat = fitted_patterns.get("all days")
             if _pat:
-                _fig = _render_sine_chart(_prof, _pat, f" – {_label}")
-                _figs.append(_fig)
-
-        if _figs:
-            _out = mo.vstack(
-                [
-                    mo.md("""
-                ### 🌊 Sine Wave Pattern Preview
-
-                Charts show your sine patterns overlaid on data profiles.
-                **Adjust sliders above** to modify patterns in real-time,
-                then click **Apply** to use them for gap filling.
-                """),
-                    mo.hstack(_figs, gap=1),
-                    _apply_button,
-                ]
-            )
+                _fig = _render_sine_chart(profiles.get("all days"), _pat)
+                sine_preview_ui = mo.vstack([
+                    mo.md("### 🌊 Sine Wave Pattern\n\nAdjust the number inputs above — the preview and gap fill update instantly."),
+                    _fig,
+                ])
+            else:
+                sine_preview_ui = mo.callout(mo.md("No sine pattern available."), kind="warn")
         else:
-            _out = mo.callout(mo.md("No sine patterns available."), kind="warn")
-
-    _out
-    return
+            _figs = []
+            for _dt_key, _label in [("weekday", "Weekday"), ("weekend", "Weekend")]:
+                _pat = fitted_patterns.get(_dt_key)
+                if _pat:
+                    _figs.append(_render_sine_chart(profiles.get(_dt_key), _pat, f" – {_label}"))
+            if _figs:
+                sine_preview_ui = mo.vstack([
+                    mo.md("### 🌊 Sine Wave Patterns\n\nAdjust number inputs above — preview and gap fill update instantly."),
+                    mo.hstack(_figs, gap=1),
+                ])
+            else:
+                sine_preview_ui = mo.callout(mo.md("No sine patterns available."), kind="warn")
+    return (sine_preview_ui,)
 
 
 @app.cell
@@ -2196,169 +2138,85 @@ def _(
     pattern_mode,
     plt,
     profiles,
-    set_committed_patterns,
-    set_editor_patterns,
 ):
-    """Display Gaussian patterns with Apply button.
+    """Gaussian pattern preview — reactive, no Apply button needed.
 
-    Charts update automatically when sliders change (marimo reactivity).
-    Apply button commits patterns to both committed and editor states.
+    Updates automatically when number inputs change (marimo reactivity).
+    Returns gaussian_preview_ui for the side-by-side layout cell.
     """
-    mo.stop(pattern_mode.value != "Gaussian" or n_components_slider is None)
+    gaussian_preview_ui = None  # safe default — always defined
 
-    def _render_gaussian_chart(stats_df, pattern, title_suffix=""):
-        """Render matplotlib chart with Gaussian pattern."""
-        fig, ax = plt.subplots(figsize=(6, 3))
+    if pattern_mode.value == "Gaussian" and n_components_slider is not None:
 
-        # Generate pattern curve
-        _h = np.linspace(0, 24, 200)
-        _values = pattern.evaluate(_h)
+        def _render_gaussian_chart(stats_df, pattern, title_suffix=""):
+            fig, ax = plt.subplots(figsize=(6, 3))
 
-        # Plot pattern
-        ax.plot(_h, _values, "-", color="coral", linewidth=2.5, label="Pattern")
+            _h = np.linspace(0, 24, 200)
+            ax.plot(_h, pattern.evaluate(_h), "-", color="coral", linewidth=2.5, label="Pattern")
 
-        # Add data silhouette if available
-        if stats_df is not None and not stats_df.empty:
-            _mean = stats_df["mean"]
-            _std = stats_df["std"].fillna(0)
-            _pmin, _pmax = _mean.min(), _mean.max()
-            _range = _pmax - _pmin
+            if stats_df is not None and not stats_df.empty:
+                _mean = stats_df["mean"]
+                _std = stats_df["std"].fillna(0)
+                _pmin, _pmax = _mean.min(), _mean.max()
+                _range = _pmax - _pmin
+                _norm = (lambda v: (v - _pmin) / _range) if _range > 0 else (lambda v: np.full_like(v, 0.5))
+                _hours = stats_df.index.values
+                ax.fill_between(_hours, _norm((_mean - 2 * _std).values), _norm((_mean + 2 * _std).values), color="lightgray", alpha=0.6, label="±2 std dev")
+                ax.plot(_hours, _norm(_mean.values), "-", color="gray", linewidth=2, alpha=0.7, label="Mean profile")
 
-            if _range > 0:
-                _norm = lambda v: (v - _pmin) / _range
-            else:
-                _norm = lambda v: np.full_like(v, 0.5)
+            _COLORS = ["#e63946", "#457b9d", "#2a9d8f", "#e9c46a", "#f4a261"]
+            if pattern.mode == "gaussian":
+                for i, comp in enumerate(pattern.gaussian_components):
+                    _comp_vals = pattern.baseline + comp.evaluate(_h)
+                    ax.plot(_h, np.clip(_comp_vals, 0, 1), "--", color=_COLORS[i % len(_COLORS)], linewidth=1.5, alpha=0.7, label=f"Gaussian {i + 1}")
 
-            # Plot silhouette
-            _hours = stats_df.index.values
-            _mean_norm = _norm(_mean.values)
-            _std_lower = _norm((_mean - 2 * _std).values)
-            _std_upper = _norm((_mean + 2 * _std).values)
+            ax.set_xlabel("Hour of day")
+            ax.set_ylabel("Normalized value (0–1)")
+            ax.set_xlim(0, 24)
+            ax.set_ylim(-0.1, 1.1)
+            ax.legend(loc="upper right", fontsize=8)
+            ax.grid(True, alpha=0.3)
+            ax.set_title(f"Gaussian Pattern ({n_components_slider.value} components){title_suffix}")
+            return fig
 
-            ax.fill_between(
-                _hours,
-                _std_lower,
-                _std_upper,
-                color="lightgray",
-                alpha=0.6,
-                label="±2 std dev",
-            )
-            ax.plot(
-                _hours,
-                _mean_norm,
-                "-",
-                color="gray",
-                linewidth=2,
-                alpha=0.7,
-                label="Mean profile",
-            )
-
-        # Add individual components if multiple
-        if pattern.mode == "gaussian" and len(pattern.gaussian_components) > 1:
-            for i, comp in enumerate(pattern.gaussian_components):
-                _comp_vals = pattern.baseline + comp.evaluate(_h)
-                ax.plot(
-                    _h,
-                    np.clip(_comp_vals, 0, 1),
-                    "--",
-                    color="gray",
-                    linewidth=1.5,
-                    alpha=0.4,
-                    label=f"Gaussian {i + 1}",
-                )
-
-        ax.set_xlabel("Hour of day")
-        ax.set_ylabel("Normalized value (0–1)")
-        ax.set_xlim(0, 24)
-        ax.set_ylim(-0.1, 1.1)
-        ax.legend(loc="upper right", fontsize=8)
-        ax.grid(True, alpha=0.3)
-        ax.set_title(
-            f"Gaussian Pattern ({n_components_slider.value} components){title_suffix}"
-        )
-
-        return fig
-
-    def _apply_gaussian_patterns(_):
-        """Commit current Gaussian patterns to state."""
-        _patterns = {}
         if day_type_radio.value == "all days":
-            _patterns["all days"] = fitted_patterns.get("all days")
-        else:
-            _patterns["weekday"] = fitted_patterns.get("weekday")
-            _patterns["weekend"] = fitted_patterns.get("weekend")
-        set_committed_patterns(_patterns)
-        # Also update editor state so if user toggles autofit again, they start from here
-        set_editor_patterns(_patterns)
-
-    _apply_button = mo.ui.button(
-        label="✅ Apply Pattern",
-        on_click=_apply_gaussian_patterns,
-    )
-
-    # Render and display charts
-    if day_type_radio.value == "all days":
-        _pat = fitted_patterns.get("all days")
-        _prof = profiles.get("all days")
-        if _pat:
-            _fig = _render_gaussian_chart(_prof, _pat)
-            _out = mo.vstack(
-                [
-                    mo.md("""
-                ### 📈 Gaussian Pattern Preview
-
-                The chart shows your Gaussian pattern (coral) overlaid on
-                the data profile (gray). Individual components shown as dashed lines.
-                **Adjust the sliders above** to modify the pattern in real-time,
-                then click **Apply Pattern** to use it for gap filling.
-                """),
-                    _fig,
-                    _apply_button,
-                ]
-            )
-        else:
-            _out = mo.callout(mo.md("No Gaussian pattern available."), kind="warn")
-    else:  # weekdays + weekends
-        _figs = []
-        for _dt_key, _label in [("weekday", "Weekday"), ("weekend", "Weekend")]:
-            _pat = fitted_patterns.get(_dt_key)
-            _prof = profiles.get(_dt_key)
+            _pat = fitted_patterns.get("all days")
             if _pat:
-                _fig = _render_gaussian_chart(_prof, _pat, f" – {_label}")
-                _figs.append(_fig)
-
-        if _figs:
-            _out = mo.vstack(
-                [
-                    mo.md("""
-                ### 📈 Gaussian Pattern Preview
-
-                Charts show your Gaussian patterns overlaid on data profiles.
-                **Adjust sliders above** to modify patterns in real-time,
-                then click **Apply** to use them for gap filling.
-                """),
-                    mo.hstack(_figs, gap=1),
-                    _apply_button,
-                ]
-            )
+                _fig = _render_gaussian_chart(profiles.get("all days"), _pat)
+                gaussian_preview_ui = mo.vstack([
+                    mo.md("### 📈 Gaussian Pattern\n\nAdjust the number inputs above — the preview and gap fill update instantly."),
+                    _fig,
+                ])
+            else:
+                gaussian_preview_ui = mo.callout(mo.md("No Gaussian pattern available."), kind="warn")
         else:
-            _out = mo.callout(mo.md("No Gaussian patterns available."), kind="warn")
-
-    _out
-    return
+            _figs = []
+            for _dt_key, _label in [("weekday", "Weekday"), ("weekend", "Weekend")]:
+                _pat = fitted_patterns.get(_dt_key)
+                if _pat:
+                    _figs.append(_render_gaussian_chart(profiles.get(_dt_key), _pat, f" – {_label}"))
+            if _figs:
+                gaussian_preview_ui = mo.vstack([
+                    mo.md("### 📈 Gaussian Patterns\n\nAdjust number inputs above — preview and gap fill update instantly."),
+                    mo.hstack(_figs, gap=1),
+                ])
+            else:
+                gaussian_preview_ui = mo.callout(mo.md("No Gaussian patterns available."), kind="warn")
+    return (gaussian_preview_ui,)
 
 
 @app.cell
-def _(get_committed_patterns, mo):
-    """Read committed patterns from mo.state.
+def _(fitted_patterns, get_committed_patterns, pattern_mode):
+    """active_patterns: what feeds the gap-fill preview.
 
-    This cell re-executes only when set_committed_patterns is called
-    (i.e., when the user clicks Apply Pattern), not during puck dragging.
-    The state is initialized with auto-fitted patterns so the gap-fill
-    preview is available immediately on load.
+    - Spline mode: committed on Apply click (via get_committed_patterns).
+    - Sine / Gaussian: reactive — follows fitted_patterns automatically so
+      the preview updates whenever a number input changes, with no Apply needed.
     """
-    active_patterns = get_committed_patterns()
-    mo.stop(not active_patterns)
+    if pattern_mode.value == "Spline":
+        active_patterns = get_committed_patterns()
+    else:
+        active_patterns = fitted_patterns
     return (active_patterns,)
 
 
@@ -2378,149 +2236,163 @@ def _(
     seed_number,
     series,
 ):
-    mo.stop(
-        not active_patterns,
-        mo.callout(mo.md("No pattern configured yet."), kind="warn"),
-    )
+    gap_fill_ui = None  # safe default
 
-    if len(active_patterns) == 1 and "all days" in active_patterns:
-        _pat_arg = active_patterns["all days"]
+    if not active_patterns:
+        gap_fill_ui = mo.callout(mo.md("No pattern configured yet."), kind="warn")
     else:
-        _pat_arg = active_patterns
 
-    _results = pattern_fill.pattern_fill(
-        [series],
-        pattern=_pat_arg,
-        pattern_window_days=pattern_window_days_slider.value,
-        normalize_area=normalize_checkbox.value,
-        blend_minutes=blend_minutes_slider.value,
-        add_noise=add_noise_checkbox.value,
-        ar_order=ar_order_slider.value,
-        ar_window_days=ar_window_days_slider.value if add_noise_checkbox.value else None,
-        random_seed=int(seed_number.value) if add_noise_checkbox.value else None,
-    )
-    _filled, _steps = _results[0]
+        if len(active_patterns) == 1 and "all days" in active_patterns:
+            _pat_arg = active_patterns["all days"]
+        else:
+            _pat_arg = active_patterns
 
-    # Prepare data for Altair charts
-    # Before chart: original series with gaps highlighted
-    _before_df = pd.DataFrame(
-        {"time": series.index, "value": series.values, "is_gap": series.isna()}
-    )
+        _results = pattern_fill.pattern_fill(
+            [series],
+            pattern=_pat_arg,
+            pattern_window_days=pattern_window_days_slider.value,
+            normalize_area=normalize_checkbox.value,
+            blend_minutes=blend_minutes_slider.value,
+            add_noise=add_noise_checkbox.value,
+            ar_order=ar_order_slider.value,
+            ar_window_days=ar_window_days_slider.value if add_noise_checkbox.value else None,
+            random_seed=int(seed_number.value) if add_noise_checkbox.value else None,
+        )
+        _filled, _steps = _results[0]
 
-    # Calculate gap regions
-    _nan_mask = series.isna()
-    _gap_rects = []
-    if _nan_mask.any():
-        _changes = _nan_mask.astype(int).diff().fillna(0)
-        _starts = series.index[_changes == 1]
-        _ends = series.index[_changes == -1]
-        if _nan_mask.iloc[0]:
-            _starts = _starts.insert(0, series.index[0])
-        if _nan_mask.iloc[-1]:
-            _ends = _ends.append(pd.DatetimeIndex([series.index[-1]]))
-        for _s, _e in zip(_starts, _ends):
-            _gap_rects.append({"start": _s, "end": _e})
+        _before_df = pd.DataFrame(
+            {"time": series.index, "value": series.values, "is_gap": series.isna()}
+        )
 
-    # Before chart
-    _valid_before_df = _before_df[_before_df["is_gap"] == False].copy()
+        _nan_mask = series.isna()
+        _gap_rects = []
+        if _nan_mask.any():
+            _changes = _nan_mask.astype(int).diff().fillna(0)
+            _starts = series.index[_changes == 1]
+            _ends = series.index[_changes == -1]
+            if _nan_mask.iloc[0]:
+                _starts = _starts.insert(0, series.index[0])
+            if _nan_mask.iloc[-1]:
+                _ends = _ends.append(pd.DatetimeIndex([series.index[-1]]))
+            for _s, _e in zip(_starts, _ends):
+                _gap_rects.append({"start": _s, "end": _e})
 
-    # Calculate dynamic y-axis range
-    _before_values = _valid_before_df["value"].dropna()
-    if len(_before_values) > 0:
-        _y_min = _before_values.min()
-        _y_max = _before_values.max()
-        _y_range = _y_max - _y_min
-        _y_extent = 0.2 * _y_range if _y_range > 0 else 1
-        _y_domain_min = _y_min - _y_extent
-        _y_domain_max = _y_max + _y_extent
+        _valid_before_df = _before_df[_before_df["is_gap"] == False].copy()
+
+        _before_values = _valid_before_df["value"].dropna()
+        if len(_before_values) > 0:
+            _y_min = _before_values.min()
+            _y_max = _before_values.max()
+            _y_range = _y_max - _y_min
+            _y_extent = 0.2 * _y_range if _y_range > 0 else 1
+            _y_domain_min = _y_min - _y_extent
+            _y_domain_max = _y_max + _y_extent
+        else:
+            _y_domain_min = 0
+            _y_domain_max = 1
+
+        _before_chart = (
+            alt.Chart(_valid_before_df)
+            .mark_line(color="steelblue", strokeWidth=0.8)
+            .encode(
+                x=alt.X("time:T", title="Time"),
+                y=alt.Y(
+                    "value:Q",
+                    title=series.name,
+                    scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]),
+                ),
+            )
+        )
+
+        if _gap_rects:
+            _gap_df = pd.DataFrame(_gap_rects)
+            _gap_chart = (
+                alt.Chart(_gap_df)
+                .mark_rect(color="red", opacity=0.15)
+                .encode(x=alt.X("start:T"), x2=alt.X2("end:T"))
+            )
+            _before_chart = _before_chart + _gap_chart
+
+        _before_chart = _before_chart.properties(
+            title="Before (with gaps)", height=150
+        ).configure_axis(labelFontSize=10, titleFontSize=11)
+
+        _after_df = pd.DataFrame({"time": _filled.index, "value": _filled.values})
+
+        _filled_mask = series.isna() & _filled.notna()
+
+        _after_values = _after_df["value"].dropna()
+        if len(_before_values) > 0 and len(_after_values) > 0:
+            _y_min = min(_before_values.min(), _after_values.min())
+            _y_max = max(_before_values.max(), _after_values.max())
+            _y_range = _y_max - _y_min
+            _y_extent = 0.2 * _y_range if _y_range > 0 else 1
+            _y_domain_min = _y_min - _y_extent
+            _y_domain_max = _y_max + _y_extent
+        elif len(_after_values) > 0:
+            _y_min = _after_values.min()
+            _y_max = _after_values.max()
+            _y_range = _y_max - _y_min
+            _y_extent = 0.2 * _y_range if _y_range > 0 else 1
+            _y_domain_min = _y_min - _y_extent
+            _y_domain_max = _y_max + _y_extent
+        else:
+            _y_domain_min = 0
+            _y_domain_max = 1
+
+        _after_chart = (
+            alt.Chart(_after_df)
+            .mark_line(color="steelblue", strokeWidth=0.8)
+            .encode(
+                x=alt.X("time:T", title="Time"),
+                y=alt.Y(
+                    "value:Q",
+                    title=_filled.name,
+                    scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]),
+                ),
+            )
+        )
+
+        if _filled_mask.any():
+            _filled_pts_df = pd.DataFrame(
+                {"time": _filled.index[_filled_mask], "value": _filled.values[_filled_mask]}
+            )
+            _filled_pts_chart = (
+                alt.Chart(_filled_pts_df)
+                .mark_point(color="coral", size=10)
+                .encode(x=alt.X("time:T"), y=alt.Y("value:Q"))
+            )
+            _after_chart = _after_chart + _filled_pts_chart
+
+        _after_chart = (
+            _after_chart.properties(title="After (gaps filled)", height=150)
+            .configure_axis(labelFontSize=10, titleFontSize=11)
+            .configure_legend(labelFontSize=8)
+        )
+
+        gap_fill_ui = mo.vstack([_before_chart, _after_chart])
+    return (gap_fill_ui,)
+
+
+@app.cell
+def _(
+    gap_fill_ui,
+    gaussian_preview_ui,
+    mo,
+    pattern_mode,
+    sine_preview_ui,
+    spline_editor_ui,
+):
+    """Side-by-side layout: editor panel on the left, gap fill preview on the right."""
+    if pattern_mode.value == "Spline":
+        _editor_panel = spline_editor_ui
+    elif pattern_mode.value == "Sine Waves":
+        _editor_panel = sine_preview_ui
     else:
-        _y_domain_min = 0
-        _y_domain_max = 1
+        _editor_panel = gaussian_preview_ui
 
-    _before_chart = (
-        alt.Chart(_valid_before_df)
-        .mark_line(color="steelblue", strokeWidth=0.8)
-        .encode(
-            x=alt.X("time:T", title="Time"),
-            y=alt.Y(
-                "value:Q",
-                title=series.name,
-                scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]),
-            ),
-        )
-    )
-
-    if _gap_rects:
-        _gap_df = pd.DataFrame(_gap_rects)
-        _gap_chart = (
-            alt.Chart(_gap_df)
-            .mark_rect(color="red", opacity=0.15)
-            .encode(x=alt.X("start:T"), x2=alt.X2("end:T"))
-        )
-        _before_chart = _before_chart + _gap_chart
-
-    _before_chart = _before_chart.properties(
-        title="Before (with gaps)", height=150
-    ).configure_axis(labelFontSize=10, titleFontSize=11)
-
-    # After chart: filled series with filled points highlighted
-    _after_df = pd.DataFrame({"time": _filled.index, "value": _filled.values})
-
-    _filled_mask = series.isna() & _filled.notna()
-
-    # Calculate dynamic y-axis range based on both before and after data
-    _after_values = _after_df["value"].dropna()
-    if len(_before_values) > 0 and len(_after_values) > 0:
-        _y_min = min(_before_values.min(), _after_values.min())
-        _y_max = max(_before_values.max(), _after_values.max())
-        _y_range = _y_max - _y_min
-        _y_extent = 0.2 * _y_range if _y_range > 0 else 1
-        _y_domain_min = _y_min - _y_extent
-        _y_domain_max = _y_max + _y_extent
-    elif len(_after_values) > 0:
-        _y_min = _after_values.min()
-        _y_max = _after_values.max()
-        _y_range = _y_max - _y_min
-        _y_extent = 0.2 * _y_range if _y_range > 0 else 1
-        _y_domain_min = _y_min - _y_extent
-        _y_domain_max = _y_max + _y_extent
-    else:
-        _y_domain_min = 0
-        _y_domain_max = 1
-
-    _after_chart = (
-        alt.Chart(_after_df)
-        .mark_line(color="steelblue", strokeWidth=0.8)
-        .encode(
-            x=alt.X("time:T", title="Time"),
-            y=alt.Y(
-                "value:Q",
-                title=_filled.name,
-                scale=alt.Scale(domain=[_y_domain_min, _y_domain_max]),
-            ),
-        )
-    )
-
-    if _filled_mask.any():
-        _filled_pts_df = pd.DataFrame(
-            {"time": _filled.index[_filled_mask], "value": _filled.values[_filled_mask]}
-        )
-        _filled_pts_chart = (
-            alt.Chart(_filled_pts_df)
-            .mark_point(color="coral", size=10)
-            .encode(x=alt.X("time:T"), y=alt.Y("value:Q"))
-        )
-        _after_chart = _after_chart + _filled_pts_chart
-
-    _after_chart = (
-        _after_chart.properties(title="After (gaps filled)", height=150)
-        .configure_axis(labelFontSize=10, titleFontSize=11)
-        .configure_legend(labelFontSize=8)
-    )
-
-    _out = mo.vstack([_before_chart, _after_chart])
-
-    _out
+    _panels = [p for p in [_editor_panel, gap_fill_ui] if p is not None]
+    mo.hstack(_panels, gap=2) if _panels else mo.callout(mo.md("Load data to get started."), kind="warn")
     return
 
 
@@ -2533,7 +2405,6 @@ def _(
     ar_window_days_slider,
     base64,
     blend_minutes_slider,
-    df,
     import_type,
     mo,
     normalize_checkbox,
@@ -2558,7 +2429,6 @@ def _(
 
     def create_meteaudata_download(
         series,
-        df_all,
         pattern_arg,
         normalize,
         blend_minutes,
@@ -2647,13 +2517,13 @@ def _(
 
             # Clean the series name to avoid metEAUdata parsing issues with multiple #
             # metEAUdata expects names like "base#version", not "base#1#2"
-            clean_series = df_all[series.name].copy()
-            if "#" in str(series.name):
-                # Extract just the base name before the first #
-                base_name = str(series.name).split("#")[0]
-                clean_series.name = base_name
+            # Use `series` directly — it already has the correct DatetimeIndex.
+            # Using df_all[series.name] would give a numeric index (raw CSV).
+            clean_series = series.copy()
+            if "#" in str(clean_series.name):
+                clean_series.name = str(clean_series.name).split("#")[0]
             else:
-                clean_series.name = str(series.name)
+                clean_series.name = str(clean_series.name)
 
             signal = Signal(
                 input_data=clean_series,
@@ -2710,7 +2580,6 @@ def _(
 
     create_meteaudata_download(
         series,
-        df,
         _pat_arg,
         normalize_checkbox.value,
         blend_minutes_slider.value,
