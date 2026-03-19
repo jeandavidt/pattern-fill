@@ -126,6 +126,9 @@ def fit_gaussian_pattern(
     if not components:
         components = [GaussianComponent(0.1, 0.0, 2.0)]
 
+    # Sort left-to-right by center hour
+    components.sort(key=lambda c: c.center)
+
     return DailyPattern(
         gaussian_components=components,
         baseline=float(baseline),

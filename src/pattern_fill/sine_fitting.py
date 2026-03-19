@@ -85,9 +85,11 @@ def fit_sine_pattern(
 
     components = []
     for freq in frequencies:
-        amplitude, phase = _fit_single_sine(hours, values_norm, freq, baseline)
+        # Clip to the optimiser's frequency bounds before using as initial guess
+        freq_init = float(np.clip(freq, 0.083, 12.0))
+        amplitude, phase, freq_fitted = _fit_single_sine(hours, values_norm, freq_init, baseline)
         if amplitude > 0.01:
-            components.append(SineComponent(amplitude, freq, phase))
+            components.append(SineComponent(amplitude, freq_fitted, phase))
 
     if not components:
         components = [SineComponent(0.1, 1.0, 0.0)]
@@ -129,36 +131,38 @@ def _detect_frequencies_fft(
 def _fit_single_sine(
     hours: np.ndarray,
     values: np.ndarray,
-    frequency: float,
+    frequency_init: float,
     baseline: float,
-) -> tuple[float, float]:
-    """Fit amplitude and phase for a single sine wave component.
+) -> tuple[float, float, float]:
+    """Fit amplitude, phase, and frequency for a single sine wave component.
 
-    Given frequency and baseline, optimizes amplitude and phase to
-    minimize residual error.
+    Uses the FFT-detected frequency as an initial guess and lets least-squares
+    optimise all three parameters jointly. Clipping is intentionally omitted
+    from the residual so gradients are informative throughout the search space.
 
     Returns
     -------
     amplitude : float
     phase : float (in hours)
+    frequency : float (cycles per day)
     """
 
     def residual(params):
-        amp, phase = params
+        amp, phase, freq = params
         predicted = baseline + amp * np.cos(
-            2 * np.pi * frequency * (hours - phase) / 24.0
+            2 * np.pi * freq * (hours - phase) / 24.0
         )
-        predicted = np.clip(predicted, 0.0, 1.0)
+        # No clipping — keeps gradients well-defined for the optimiser
         return predicted - values
 
-    initial_amp = np.std(values - baseline)
-    initial_phase = hours[np.argmax(values)]
+    initial_amp = float(np.clip(np.std(values - baseline), 0.01, 1.0))
+    initial_phase = float(hours[np.argmax(values)])
 
     result = least_squares(
         residual,
-        x0=[initial_amp, initial_phase],
-        bounds=([0, 0], [1.0, 24.0]),
+        x0=[initial_amp, initial_phase, frequency_init],
+        bounds=([0.0, 0.0, 0.083], [1.0, 24.0, 12.0]),
     )
 
-    amplitude, phase = result.x
-    return float(amplitude), float(phase)
+    amplitude, phase, frequency = result.x
+    return float(amplitude), float(phase), float(frequency)
