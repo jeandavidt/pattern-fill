@@ -78,8 +78,9 @@ def _():
 
 
 @app.cell
-def _(mo):
+def _(mo, pattern_fill):
     mo.md(f"""
+    # `pattern_fill` v{pattern_fill.__version__}
     Design daily diurnal patterns for gap-filling time series data.
     Upload your own data or use the built-in demo, then fit a pattern
     automatically or shape one by hand.
@@ -174,7 +175,7 @@ def _(csv_sep, data_source, file_upload, meteaudata_upload, mo):
     After uploading you'll pick which column is the datetime and which is the value.
     Gaps (missing values) can be left as empty cells or `NaN` — that's what the tool fills.
 
-    > **Tip:** download `test_upload.csv` from the repo `notebooks/` folder for a ready-to-use example.
+
     """),
             kind="info",
         )
@@ -2314,7 +2315,7 @@ def _(
             _before_chart = _before_chart + _gap_chart
 
         _before_chart = _before_chart.properties(
-            title="Before (with gaps)", height=150
+            title="Before (with gaps)", width="container", height=150
         ).interactive().configure_axis(labelFontSize=10, titleFontSize=11)
 
         _after_df = pd.DataFrame({"time": _filled.index, "value": _filled.values})
@@ -2365,7 +2366,7 @@ def _(
             _after_chart = _after_chart + _filled_pts_chart
 
         _after_chart = (
-            _after_chart.properties(title="After (gaps filled)", height=150)
+            _after_chart.properties(title="After (gaps filled)", width="container", height=150)
             .interactive()
             .configure_axis(labelFontSize=10, titleFontSize=11)
             .configure_legend(labelFontSize=8)
