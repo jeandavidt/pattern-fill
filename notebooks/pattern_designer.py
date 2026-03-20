@@ -2315,7 +2315,7 @@ def _(
 
         _before_chart = _before_chart.properties(
             title="Before (with gaps)", height=150
-        ).configure_axis(labelFontSize=10, titleFontSize=11)
+        ).interactive().configure_axis(labelFontSize=10, titleFontSize=11)
 
         _after_df = pd.DataFrame({"time": _filled.index, "value": _filled.values})
 
@@ -2366,6 +2366,7 @@ def _(
 
         _after_chart = (
             _after_chart.properties(title="After (gaps filled)", height=150)
+            .interactive()
             .configure_axis(labelFontSize=10, titleFontSize=11)
             .configure_legend(labelFontSize=8)
         )
